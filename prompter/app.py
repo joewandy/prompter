@@ -1,20 +1,24 @@
 import os
+import fnmatch
 import streamlit as st
 from pathlib import Path
 from typing import List, Dict, Optional
 import time
 
 
+@st.cache_data(show_spinner=False)
 def collect_source_files(
         folder_path: str,
         extensions: List[str],
         callback=None,
         skip_hidden: bool = True,
-        max_file_size_mb: Optional[float] = None
+        max_file_size_mb: Optional[float] = None,
+        exclude_patterns: Optional[List[str]] = None
 ) -> List[Dict[str, str]]:
     """
     Collects source files from the specified folder and its subfolders based on the given extensions.
-    Optionally skips hidden directories/files and enforces a max file size limit.
+    Optionally skips hidden directories/files, enforces a max file size limit, and excludes certain
+    patterns (e.g., .git, node_modules, venv).
 
     Args:
         folder_path (str): Path to the folder.
@@ -23,12 +27,17 @@ def collect_source_files(
         skip_hidden (bool, optional): Whether to skip hidden directories and files. Defaults to True.
         max_file_size_mb (float, optional): Maximum allowed file size in MB to read fully.
             If a file exceeds this size, it will be truncated or skipped. Defaults to None.
+        exclude_patterns (List[str], optional): List of directory/file patterns to exclude. Defaults to None.
 
     Returns:
         List[Dict[str, str]]: List of dictionaries containing 'filename' and 'content'.
     """
     source_files = []
     total_files = 0
+
+    # Ensure the exclude_patterns list is not None
+    if exclude_patterns is None:
+        exclude_patterns = []
 
     # Clean and standardize extensions (ensure leading dot)
     cleaned_extensions = []
@@ -38,13 +47,38 @@ def collect_source_files(
             ext = '.' + ext
         cleaned_extensions.append(ext)
 
+    def should_exclude(path: str) -> bool:
+        """
+        Checks if a given directory or file path should be excluded
+        based on the exclude_patterns list.
+        """
+        for pattern in exclude_patterns:
+            pattern = pattern.strip()
+            if pattern:
+                # If pattern has slash or backslash, we can treat it as a path pattern;
+                # otherwise, match partial segments.
+                if fnmatch.fnmatch(path, pattern):
+                    return True
+                # Also match if any sub-part of the path matches the pattern
+                # (e.g. 'node_modules' in a path).
+                if pattern in path.split(os.sep):
+                    return True
+        return False
+
     # First, count total files to process for progress tracking
     for root, dirs, files in os.walk(folder_path):
-        if skip_hidden:
-            # Filter out hidden directories
-            dirs[:] = [d for d in dirs if not d.startswith('.')]
+        # Exclude directories
+        dirs[:] = [
+            d for d in dirs
+            if not (skip_hidden and d.startswith('.')) and not should_exclude(os.path.join(root, d))
+        ]
         for file in files:
+            full_path = os.path.join(root, file)
+            relative_path = os.path.relpath(full_path, folder_path)
+
             if skip_hidden and file.startswith('.'):
+                continue
+            if should_exclude(full_path):
                 continue
             if any(file.lower().endswith(e) for e in cleaned_extensions):
                 total_files += 1
@@ -56,21 +90,25 @@ def collect_source_files(
 
     # Process each file
     for root, dirs, files in os.walk(folder_path):
-        if skip_hidden:
-            dirs[:] = [d for d in dirs if not d.startswith('.')]
+        # Exclude directories
+        dirs[:] = [
+            d for d in dirs
+            if not (skip_hidden and d.startswith('.')) and not should_exclude(os.path.join(root, d))
+        ]
         for file in files:
+            full_path = os.path.join(root, file)
+            relative_path = os.path.relpath(full_path, folder_path)
+
             if skip_hidden and file.startswith('.'):
                 continue
+            if should_exclude(full_path):
+                continue
             if any(file.lower().endswith(e) for e in cleaned_extensions):
-                full_path = os.path.join(root, file)
-                relative_path = os.path.relpath(full_path, folder_path)
-
                 file_size_mb = os.path.getsize(full_path) / (1024 * 1024)
                 content = ""
                 try:
                     if max_file_size_mb and file_size_mb > max_file_size_mb:
-                        # Option: skip or read only a snippet.
-                        # Here, we choose to truncate:
+                        # Truncate large file
                         with open(full_path, 'r', encoding='utf-8', errors='replace') as f:
                             content = f.read(1024 * 100)  # Read first ~100 KB
                             content += f"\n<!-- File truncated because it exceeded {max_file_size_mb} MB -->"
@@ -89,8 +127,8 @@ def collect_source_files(
                 if callback:
                     progress = int((processed_files / total_files) * 100)
                     callback(progress)
-                # Optional: time.sleep to simulate work
-                # time.sleep(0.05)
+                # Optional: time.sleep(0.05)
+
     return source_files
 
 
@@ -117,9 +155,12 @@ def get_language_extension(filename: str) -> str:
         '.php': 'php',
         '.html': 'html',
         '.css': 'css',
+        '.json': 'json',
+        '.md': 'markdown',
         '.ts': 'typescript',
         '.swift': 'swift',
         '.kt': 'kotlin',
+        # Add more mappings as needed
     }
     return mapping.get(ext, '')
 
@@ -180,13 +221,20 @@ def main():
         value=0.0
     )
 
+    # New: Exclusion Patterns
+    exclude_input = st.sidebar.text_input(
+        "Exclude Patterns",
+        value=".git, node_modules, venv, .DS_Store",
+        placeholder="Enter comma-separated patterns to exclude (e.g. node_modules, venv)"
+    )
+
     st.sidebar.markdown("""
     ---
     **Instructions**:
     1. Enter the path to the folder containing your source files.
     2. Specify the file extensions to include, separated by commas.
-    3. Enter a description of the problem you're encountering.
-    4. (Optional) Set whether to skip hidden files/folders and set a max file size limit if desired.
+    3. Optionally skip hidden files/folders, limit file size, or exclude certain patterns (like .git).
+    4. Enter a description of the problem you're encountering.
     5. Click "Generate Prompt" to compile the prompt.
     """)
 
@@ -208,6 +256,11 @@ def main():
         if not extensions_input.strip():
             st.error("Please specify at least one file extension.")
             return
+
+        # Prepare exclusion patterns
+        exclusion_patterns = []
+        if exclude_input.strip():
+            exclusion_patterns = [pat.strip() for pat in exclude_input.split(',') if pat.strip()]
 
         problem_desc_input = problem_description.strip()
         if not problem_desc_input:
@@ -236,11 +289,12 @@ def main():
                 extensions=extensions,
                 callback=update_progress,
                 skip_hidden=skip_hidden,
-                max_file_size_mb=max_size
+                max_file_size_mb=max_size,
+                exclude_patterns=exclusion_patterns
             )
 
         if not source_files:
-            st.info("No source files found with the specified extensions.")
+            st.info("No source files found with the specified extensions or everything was excluded.")
         else:
             prompt = generate_prompt(source_files, problem_desc_input)
             st.success("Prompt generated successfully!")
