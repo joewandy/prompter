@@ -1,184 +1,115 @@
 import os
-import streamlit as st
+import fnmatch
 from pathlib import Path
 from typing import List, Dict
 
-##########################
-# 1. EXTENSION PRESETS   #
-##########################
+import dash
+from dash import dcc, html, Input, Output, State, ALL, no_update
+import dash_bootstrap_components as dbc
+import dash_mantine_components as dmc
+from dash_iconify import DashIconify
+from dash._dash_renderer import _set_react_version
+
+_set_react_version("18.2.0")
+
 EXTENSION_PRESETS = {
-    "None": "",
+    "None": ".py, .js, .ts, .html, .css, .json",
     "Django": ".py, .html, .css, .js",
     "Machine Learning": ".py, .ipynb, .csv, .txt",
     "Frontend (JS/TS)": ".html, .css, .js, .ts, .json",
     "Backend (General)": ".py, .js, .ts, .java, .c, .cpp, .cs, .go, .php",
+    "VueJS": ".html, .css, .vue, .js, .ts, .json",
+    "Angular": ".html, .css, .ts, .json",
+    "React": ".js, .jsx, .ts, .tsx, .json, .html, .css",
+    "iOS (Swift)": ".swift, .h, .m, .mm, .plist",
+    "Android (Kotlin/Java)": ".kt, .java, .xml",
+    "Data Science": ".py, .ipynb, .r, .csv, .tsv, .txt",
 }
 
-#############################
-# 2. EXCLUSION PRESET LISTS #
-#############################
-# You can adjust these to suit typical project structures.
-# They will be combined with a base exclusion (below) depending on user's choice.
-EXCLUSION_PRESETS = {
-    "None": [],
-    "Django": ["migrations"],               # Example for Django
-    "Machine Learning": [".ipynb_checkpoints"],  # Common hidden notebook checkpoints
-    "Frontend (JS/TS)": ["node_modules"],   # Common for JS projects
-    "Backend (General)": ["node_modules", "venv"]  # Generic example
+BASE_EXCLUSIONS = {
+    ".git",
+    ".gitignore",
+    ".pycache",
+    "pycache",
+    "__pycache__",
+    "node_modules",
+    ".ipynb_checkpoints",
 }
 
-###############################
-# 3. BASE EXCLUSIONS & HIDDEN #
-###############################
-BASE_EXCLUDES = [".git", "__pycache__", ".venv"]  # Always excluded by default
+PRESET_EXCLUSION_MAP = {
+    "Django": {"venv", "migrations"},
+    "Machine Learning": {"venv", ".ipynb_checkpoints"},
+    "Frontend (JS/TS)": {"node_modules"},
+    "Backend (General)": {"venv", "node_modules"},
+    "VueJS": {"node_modules"},
+    "Angular": {"node_modules"},
+    "React": {"node_modules"},
+    "iOS (Swift)": {"Pods"},
+    "Android (Kotlin/Java)": {"build", ".gradle"},
+    "Data Science": {"venv", ".ipynb_checkpoints"},
+}
 
-############################################
-# 4. PROMPT LIBRARY (Minimal / Expandable) #
-############################################
-# Short, direct instructions for reasoning models.
 PROMPT_LIBRARY = {
     "None (No Template)": "",
-    "Bug Fix / Debug": (
-        "You are a specialized debugging model. Identify the root cause of any bug and propose a succinct fix."
-    ),
-    "Performance Optimization": (
-        "Optimize the code or architecture for performance improvements, providing a direct, concise approach."
-    ),
-    "Security Audit": (
-        "Review the code for security vulnerabilities. Summarize issues and propose short solutions."
-    ),
-    "Refactoring for Clarity": (
-        "Refactor the code to improve readability and maintainability. Provide clear, concise recommendations."
-    ),
-    "Database Schema Advice": (
-        "Review relevant DB schemas or data models. Suggest a concise plan that aligns with best practices."
-    ),
-    "ML Model Tuning": (
-        "Evaluate the ML code or pipeline. Recommend hyperparameter or structural changes to improve performance. Keep it direct."
-    ),
-    "Bioinformatics Pipeline": (
-        "You are a bioinformatics expert. Suggest succinct improvements for data processing or analysis pipelines."
-    ),
-    "Academic Code Snippet": (
-        "Check the provided academic or research code for correctness and clarity. If needed, propose short fixes."
-    ),
-    "Testing Strategy": (
-        "Propose a concise testing strategy for the given code or system. Outline relevant test cases briefly."
-    ),
+    "Bug Fix / Debug": "You are a specialized debugging model. Identify and fix any bugs succinctly.",
+    "Performance Optimization": "Optimize the code or architecture concisely for better performance.",
+    "Security Audit": "Review code for security issues. Provide short, direct mitigations.",
+    "Refactoring": "Refactor the code for clarity and maintainability.",
+    "Database Schema Advice": "Suggest best-practice improvements for database-related code.",
+    "ML Model Tuning": "Optimize the ML code or pipeline with short recommended changes.",
+    "Bioinformatics": "Make succinct improvements for bioinformatics data processing or analysis.",
+    "Academic Code": "Check academic code correctness. If needed, propose short fixes.",
+    "Testing Strategy": "Propose a concise testing strategy for the given code or system.",
 }
 
-###########################################
-# 5. HELPER FUNCTIONS FOR FILE MANAGEMENT #
-###########################################
-def should_skip_hidden(item_path: str) -> bool:
-    """
-    Return True if the file or folder is hidden (begins with '.'),
-    or any parent folder is hidden.
-    """
-    base_name = os.path.basename(item_path)
-    if base_name.startswith('.'):
+def is_hidden_or_excluded(path: str, exclusion_list: List[str]) -> bool:
+    p = Path(path)
+    if any(part.startswith('.') for part in p.parts):
         return True
-    # Check parents for hidden directories
-    return any(part.startswith('.') for part in Path(item_path).parts)
-
-def should_exclude_path(item_path: str, exclude_list: List[str]) -> bool:
-    """
-    Return True if item_path matches any of the folders in exclude_list.
-    Matching logic: if the exclude token appears in the path's parts.
-    """
-    parts = Path(item_path).parts
-    for ex in exclude_list:
-        ex = ex.strip()
-        if ex and ex in parts:
+    for pattern in exclusion_list:
+        if pattern in p.parts:
+            return True
+        if fnmatch.fnmatch(path, f"*{pattern}*"):
             return True
     return False
 
-def display_folder_files(
-    folder_path: str,
-    base_folder: str,
-    selected_files: List[str],
-    extensions: List[str],
-    exclude_list: List[str],
-    level: int = 0
-):
-    """
-    Recursively displays the folder structure (indentation-based) and
-    creates a checkbox for each file with a matching extension.
-    Skips hidden files/folders and any that match exclude_list.
-    """
-    try:
-        items = sorted(os.listdir(folder_path))
-    except FileNotFoundError:
-        st.error("Folder not found. Please verify your folder path.")
-        return
-
-    for item in items:
-        full_item_path = os.path.join(folder_path, item)
-
-        # Skip hidden files/folders
-        if should_skip_hidden(full_item_path):
+def add_all_files(folder_path: str, base_path: str, extensions: List[str], exclusion_list: List[str], selected_files: List[str]):
+    for root, dirs, files in os.walk(folder_path):
+        if is_hidden_or_excluded(root, exclusion_list):
+            dirs[:] = []
             continue
-
-        # Skip excluded folders/files
-        if should_exclude_path(full_item_path, exclude_list):
-            continue
-
-        if os.path.isdir(full_item_path):
-            indent = " " * (level * 2)
-            st.write(f"{indent}📁 **{item}**")
-            display_folder_files(
-                folder_path=full_item_path,
-                base_folder=base_folder,
-                selected_files=selected_files,
-                extensions=extensions,
-                exclude_list=exclude_list,
-                level=level + 1
-            )
-        else:
-            # Check extension
-            if any(item.lower().endswith(ext) for ext in extensions):
-                indent = " " * (level * 2)
-                rel_path = os.path.relpath(full_item_path, base_folder)
-                label = f"{indent}📄 {item}"
-                checked = st.checkbox(label, value=True, key=full_item_path)
-                if checked:
-                    if rel_path not in selected_files:
-                        selected_files.append(rel_path)
+        dirs[:] = [d for d in dirs if not is_hidden_or_excluded(os.path.join(root, d), exclusion_list)]
+        for file in files:
+            full_file_path = os.path.join(root, file)
+            if is_hidden_or_excluded(full_file_path, exclusion_list):
+                continue
+            if any(file.lower().endswith(ext) for ext in extensions):
+                rel_path = os.path.relpath(full_file_path, base_path)
+                if rel_path not in selected_files:
+                    selected_files.append(rel_path)
 
 def read_entire_file(full_path: str) -> str:
-    """
-    Read an entire file into a single string.
-    """
     try:
         with open(full_path, 'r', encoding='utf-8', errors='replace') as f:
             return f.read()
     except Exception as e:
         return f"<!-- Could not read file: {e} -->"
 
-def read_selected_files(
-    folder_path: str,
-    selected_files: List[str]
-) -> List[Dict[str, str]]:
-    """
-    Reads each selected file in full and returns a list of dicts.
-    """
+def read_selected_files(folder_path: str, selected_files: List[str]) -> List[Dict[str, str]]:
+    base_folder_name = os.path.basename(folder_path.rstrip("/"))
     source_files = []
     for rel_path in selected_files:
         full_path = os.path.join(folder_path, rel_path)
+        display_path = f"{base_folder_name}/{rel_path}"
         content = read_entire_file(full_path)
         source_files.append({
             'filename': rel_path,
-            'content': content
+            'display_path': display_path,
+            'content': content,
         })
     return source_files
 
-######################################
-# 6. PROMPT GENERATION & FORMATTING  #
-######################################
 def get_language_extension(filename: str) -> str:
-    """
-    Maps file extensions to language identifiers for syntax highlighting.
-    """
     ext = Path(filename).suffix.lower()
     mapping = {
         '.py': 'python',
@@ -194,170 +125,430 @@ def get_language_extension(filename: str) -> str:
         '.html': 'html',
         '.css': 'css',
         '.json': 'json',
-        '.ipynb': 'python',  # Jupyter notebooks considered Python
+        '.ipynb': 'python',
         '.csv': '',
         '.txt': '',
+        '.vue': 'html',
+        '.swift': 'swift',
+        '.kt': 'kotlin',
+        '.xml': 'xml',
+        '.r': 'r',
     }
     return mapping.get(ext, '')
 
-def generate_prompt(
-    source_files: List[Dict[str, str]],
-    problem_description: str,
-    template_text: str
-) -> str:
-    """
-    Generates a streamlined prompt for a reasoning model:
-      - Optionally starts with a template
-      - Includes the relevant code
-      - States the user's question or task
-    """
-    prompt_parts = []
-
-    # Template (if any)
-    if template_text.strip():
-        prompt_parts.append(template_text.strip())
-
-    # Include code context
-    prompt_parts.append("## Relevant Code")
+def generate_prompt(source_files: List[Dict[str, str]], problem_description: str, template_text: str, prompt_position: str) -> str:
+    code_section = ["## Relevant Code"]
     for file_info in source_files:
         language = get_language_extension(file_info['filename'])
         if language:
-            code_block = f"```{language}\n{file_info['content']}\n```"
+            code_block = f"\n```{language}\n{file_info['content']}\n```\n"
         else:
-            code_block = f"```\n{file_info['content']}\n```"
-        prompt_parts.append(f"**File: {file_info['filename']}**\n{code_block}\n")
+            code_block = f"\n```\n{file_info['content']}\n```\n"
+        code_section.append(
+            f"**File: {file_info['display_path']}**\n{code_block}"
+        )
+    code_block_str = "\n\n".join(code_section).strip()
 
-    # User's problem
-    prompt_parts.append("## Task or Question")
-    final_problem_desc = problem_description.strip() if problem_description.strip() else "No specific description provided."
-    prompt_parts.append(final_problem_desc)
+    tmpl = template_text.strip()
+    prob = problem_description.strip()
 
-    final_prompt = "\n\n".join(prompt_parts).strip()
-    return final_prompt
+    if prompt_position == "After Template":
+        return (f"{tmpl}\n\n{code_block_str}\n\n## Problem\n{prob}").strip()
+    elif prompt_position == "Top Combined":
+        combined = (tmpl + "\n\n" + prob).strip()
+        return (combined + "\n\n" + code_block_str).strip()
+    else:  # "Top Separate"
+        template_block = f"## Template\n{tmpl}"
+        problem_block = f"## Problem\n{prob}"
+        return (template_block + "\n\n" + problem_block + "\n\n" + code_block_str).strip()
 
-############################
-# 7. STREAMLIT MAIN APP    #
-############################
-def main():
-    st.set_page_config(page_title="Prompter for Reasoning Models", layout="wide")
-    st.title("🔎 Prompter for Reasoning Models")
+class FileTree:
+    """
+    We'll store all folder paths in a list: self.folders_expanded
+    so we can pass them to Accordion(value=...) for default expansion.
+    """
+    def __init__(self, filepath: Path, exclusions: List[str], extensions: List[str]):
+        self.filepath = filepath
+        self.exclusions = exclusions
+        self.extensions = extensions
+        # We'll store each folder's str(path) in a list
+        self.folders_expanded = []
 
-    # Usage instructions (condensed into a paragraph)
-    st.markdown("""
-    **Welcome to Prompter** – a lightweight tool for assembling concise, direct prompts for OpenAI _reasoning models_ like **o1** or **o3-mini**. Choose a folder, select relevant files, optionally pick an extension preset or template, then provide a brief description of your question. After generating, copy the output into your reasoning model’s interface. By keeping prompts short and unambiguous, and letting the model do its own internal reasoning, you'll often see more accurate results.
-    """)
+    def flatten(self, input_list):
+        return [item for sublist in input_list for item in sublist]
 
-    st.sidebar.header("Configuration")
+    def build_file(self, file_path: Path):
+        return dmc.Group(
+            [
+                dmc.Checkbox(
+                    id={"type": "file_checkbox", "index": str(file_path)},
+                    size="sm",
+                    checked=True
+                ),
+                DashIconify(icon="akar-icons:file", width=18),
+                dmc.Text(file_path.name, size="sm")
+            ],
+            gap=5,
+            align="center",
+            wrap="nowrap",
+            style={"paddingTop": "5px", "marginLeft": "15px"}
+        )
 
-    # Folder path input
-    folder_path = st.sidebar.text_input(
-        "Folder Path",
-        value="",
-        placeholder="Enter path to your project folder"
-    )
+    def build_folder_row(self, folder_path: Path):
+        folder_checkbox = dmc.Checkbox(
+            id={"type": "folder_checkbox", "index": str(folder_path)},
+            size="sm",
+            checked=True
+        )
+        folder_icon = DashIconify(icon="akar-icons:folder", width=18)
+        folder_name = dmc.Text(folder_path.name, size="sm")
+        folder_control = dmc.AccordionControl(
+            dmc.Group([folder_icon, folder_name], gap=5, align="center", wrap="nowrap")
+        )
+        return dmc.Group(
+            [folder_checkbox, folder_control],
+            gap=10,
+            align="center",
+            wrap="nowrap"
+        )
 
-    # Extension Preset
-    preset_label = st.sidebar.selectbox(
-        "Extension Preset",
-        list(EXTENSION_PRESETS.keys()),
-        index=0
-    )
+    def build_tree(self, path: Path):
+        """
+        For each folder, add str(path) to self.folders_expanded.
+        """
+        if is_hidden_or_excluded(str(path), self.exclusions):
+            return []
+        if path.is_file():
+            if any(path.name.lower().endswith(ext) for ext in self.extensions):
+                return [self.build_file(path)]
+            else:
+                return []
+        # It's a folder => record str(path)
+        self.folders_expanded.append(str(path))
+
+        items = sorted(list(path.iterdir()), key=lambda x: x.name)
+        children = self.flatten([self.build_tree(child) for child in items])
+        folder_row = self.build_folder_row(path)
+        return [
+            dmc.AccordionItem(
+                [folder_row, dmc.AccordionPanel(children=children)],
+                value=str(path)
+            )
+        ]
+
+    def render(self) -> dmc.Accordion:
+        tree_items = self.build_tree(self.filepath)
+        # multiple=True => can open multiple items
+        # value=self.folders_expanded => expand them all by default
+        return dmc.Accordion(
+            children=tree_items,
+            multiple=True,
+            value=self.folders_expanded,
+            variant="contained"
+        )
+
+app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
+
+mantine_theme = {
+    "fontFamily": "Inter, sans-serif",
+    "primaryColor": "indigo",
+    "defaultRadius": "sm",
+}
+
+app.layout = dmc.MantineProvider(
+    theme=mantine_theme,
+    children=dbc.Container([
+        html.H2("🔎 Prompter for Reasoning Models"),
+        html.P("A multi-tab application that helps assemble prompts from code or handle other features."),
+
+        dbc.Tabs([
+            dbc.Tab(label="Prompter", children=[
+                html.Br(),
+                html.P("This tab helps you gather code from a folder and generate a concise prompt."),
+
+                dbc.Row([
+                    dbc.Col([
+                        html.H5("Configuration"),
+                        dbc.Label("Folder Path"),
+                        dbc.Input(id="folder-path", type="text", placeholder="Enter path to your folder"),
+                        html.Br(),
+
+                        dbc.Label("Extension Preset"),
+                        dcc.Dropdown(
+                            id="extension-preset",
+                            options=[{"label": k, "value": k} for k in EXTENSION_PRESETS.keys()],
+                            value="None"
+                        ),
+                        html.Br(),
+
+                        dbc.Label("File Extensions"),
+                        dbc.Input(id="file-extensions", type="text", placeholder=".py, .js, .ts"),
+                        html.Br(),
+
+                        dbc.Label("Current Exclusion List"),
+                        dbc.Input(id="exclusions-field", type="text", placeholder=".git, .gitignore, .pycache"),
+                        html.Br(),
+
+                        dbc.Label("Prompt Template (Optional)"),
+                        dcc.Dropdown(
+                            id="prompt-template",
+                            options=[{"label": k, "value": k} for k in PROMPT_LIBRARY.keys()],
+                            value="None (No Template)"
+                        ),
+                        html.Br(),
+
+                        dbc.Label("Prompt Position"),
+                        dbc.RadioItems(
+                            id="prompt-position",
+                            options=[
+                                {"label": "After Template", "value": "After Template"},
+                                {"label": "Top Combined", "value": "Top Combined"},
+                                {"label": "Top Separate", "value": "Top Separate"},
+                            ],
+                            value="After Template"
+                        ),
+                        html.Br(),
+                        dbc.Alert(id="alert-no-files", color="danger", is_open=False),
+                    ], md=4),
+
+                    dbc.Col([
+                        html.H5("File/Folder Tree"),
+                        dbc.Alert(
+                            "Enter a valid folder path to see contents.",
+                            id="folder-warning",
+                            color="warning",
+                            is_open=True
+                        ),
+                        html.Div(
+                            id='filetree_div',
+                            style={"height": "600px", "overflowY": "auto"}
+                        ),
+                        html.Div(id="selected-count", children="0 file(s) selected", style={"marginTop": "15px"})
+                    ], md=8),
+                ], style={"marginTop": "25px"}),
+
+                html.Hr(),
+
+                dbc.Row([
+                    dbc.Col([], md=4),
+                    dbc.Col(
+                        dmc.Center(
+                            dbc.Button("Generate Prompt", id="generate-button", color="primary")
+                        ),
+                        md=4
+                    ),
+                    dbc.Col([], md=4),
+                ], style={"marginBottom": "25px"}),
+
+                dbc.Row([
+                    dbc.Col([
+                        html.H4("Describe Your Task or Question"),
+                        dcc.Textarea(
+                            id="problem-description",
+                            style={"width": "100%", "height": "300px"},
+                        )
+                    ], md=6),
+                    dbc.Col([
+                        html.H4("Generated Prompt"),
+                        dcc.Textarea(
+                            id="final-prompt-output",
+                            style={"width": "100%", "height": "300px"},
+                            readOnly=True
+                        ),
+                        html.Br(),
+                        dbc.Button("Copy Prompt", id="copy-prompt-btn", color="secondary", style={"marginRight": "10px"}),
+                        html.Span(id="download-link-container", style={"marginRight": "10px"}),
+                        dcc.Store(id="dummy-store", data="")
+                    ], md=6),
+                ], style={"marginBottom": "25px"}),
+
+            ]),
+            dbc.Tab(label="Other Feature (Coming Soon)", children=[
+                html.Br(),
+                html.H2("Another feature will go here in the future!")
+            ])
+        ])
+    ], fluid=True)
+)
+
+@app.callback(
+    Output("file-extensions", "value"),
+    Output("exclusions-field", "value"),
+    Input("extension-preset", "value")
+)
+def sync_fields_with_preset(preset_label):
+    if preset_label not in EXTENSION_PRESETS:
+        preset_label = "None"
     preset_extensions = EXTENSION_PRESETS[preset_label]
+    base_exclusion_set = set(BASE_EXCLUSIONS)
+    if preset_label in PRESET_EXCLUSION_MAP:
+        base_exclusion_set = base_exclusion_set.union(PRESET_EXCLUSION_MAP[preset_label])
 
-    # Extension override
-    extensions_input = st.sidebar.text_input(
-        "File Extensions (override or add to preset)",
-        value=preset_extensions,
-        placeholder="Comma-separated e.g. .py, .js, .ts"
-    )
+    excl_text = ", ".join(sorted(list(base_exclusion_set)))
+    return preset_extensions, excl_text
 
-    # Exclusion preset combination
-    base_excludes = BASE_EXCLUDES.copy()
-    preset_exclusions = EXCLUSION_PRESETS.get(preset_label, [])
-    combined_exclusions = list(set(base_excludes + preset_exclusions))
-
-    # Display / override exclusion
-    exclusion_str = ", ".join(combined_exclusions)
-    user_exclusion_input = st.sidebar.text_input(
-        "Excluded Folders (override below)",
-        value=exclusion_str
-    )
-    # Convert user override into list
-    final_exclusions = [ex.strip() for ex in user_exclusion_input.split(',') if ex.strip()]
-
-    # Prompt Template (Optional)
-    st.sidebar.subheader("Prompt Template (Optional)")
-    template_options = list(PROMPT_LIBRARY.keys())
-    selected_template_key = st.sidebar.selectbox(
-        "Choose a Template",
-        template_options,
-        index=0
-    )
-    chosen_template_text = PROMPT_LIBRARY.get(selected_template_key, "")
-
-    # Validate folder
+@app.callback(
+    Output("folder-warning", "is_open"),
+    Output("filetree_div", "children"),
+    Input("folder-path", "value"),
+    Input("file-extensions", "value"),
+    Input("exclusions-field", "value"),
+    prevent_initial_call=True
+)
+def update_file_tree(folder_path, file_ext_string, exclusion_string):
     if not folder_path or not os.path.isdir(folder_path):
-        st.warning("Please enter a valid folder path above.")
-        st.stop()
+        return True, ""
 
-    # Convert extension string to a list
     extensions = []
-    for ext in extensions_input.split(','):
+    for ext in file_ext_string.split(","):
         e = ext.strip().lower()
         if e and not e.startswith('.'):
             e = '.' + e
         if e:
             extensions.append(e)
 
-    st.header("Select Files")
-    with st.expander("Folder Browser (hidden + excluded folders skipped)", expanded=True):
-        selected_files = []
-        display_folder_files(
-            folder_path=folder_path,
-            base_folder=folder_path,
-            selected_files=selected_files,
-            extensions=extensions,
-            exclude_list=final_exclusions
-        )
+    user_excl_clean = set()
+    if exclusion_string.strip():
+        for x in exclusion_string.split(","):
+            x2 = x.strip()
+            if x2:
+                user_excl_clean.add(x2)
 
-    st.markdown(f"**{len(selected_files)} file(s) selected**")
+    tree_obj = FileTree(
+        filepath=Path(folder_path),
+        exclusions=sorted(list(user_excl_clean)),
+        extensions=extensions
+    )
+    return False, tree_obj.render()
 
-    problem_description = st.text_area(
-        "Describe Your Task or Question",
-        height=150,
-        placeholder="e.g., Summarize this code or find potential bugs..."
+@app.callback(
+    Output({"type": "file_checkbox", "index": ALL}, "checked"),
+    Input({"type": "folder_checkbox", "index": ALL}, "checked"),
+    State({"type": "folder_checkbox", "index": ALL}, "id"),
+    State({"type": "file_checkbox", "index": ALL}, "id"),
+    State({"type": "file_checkbox", "index": ALL}, "checked"),
+    State("folder-path", "value"),
+    State("file-extensions", "value"),
+    State("exclusions-field", "value"),
+    prevent_initial_call=True
+)
+def toggle_folder_files(folder_check_values, folder_ids, file_ids, file_check_values,
+                        folder_path, file_ext_string, exclusion_string):
+    if not folder_path or not os.path.isdir(folder_path):
+        return file_check_values
+
+    extensions = []
+    for ext in file_ext_string.split(","):
+        e = ext.strip().lower()
+        if e and not e.startswith('.'):
+            e = '.' + e
+        if e:
+            extensions.append(e)
+
+    user_excl_clean = set()
+    if exclusion_string.strip():
+        for x in exclusion_string.split(","):
+            x2 = x.strip()
+            if x2:
+                user_excl_clean.add(x2)
+
+    new_states = list(file_check_values)
+    for f_val, f_id in zip(folder_check_values, folder_ids):
+        folder_str = f_id["index"]
+        subfiles = []
+        add_all_files(folder_str, folder_path, extensions, list(user_excl_clean), subfiles)
+        for idx, (this_file_id, old_val) in enumerate(zip(file_ids, file_check_values)):
+            if this_file_id["index"]:
+                rel_path = os.path.relpath(this_file_id["index"], folder_path)
+                if rel_path in subfiles:
+                    new_states[idx] = f_val
+
+    return new_states
+
+@app.callback(
+    Output("selected-count", "children"),
+    Input({"type": "file_checkbox", "index": ALL}, "checked"),
+    prevent_initial_call=True
+)
+def count_selected_files(file_check_values):
+    if not file_check_values:
+        return "0 file(s) selected"
+    return f"{sum(bool(v) for v in file_check_values)} file(s) selected"
+
+@app.callback(
+    Output("final-prompt-output", "value"),
+    Output("alert-no-files", "is_open"),
+    Output("download-link-container", "children"),
+    Input("generate-button", "n_clicks"),
+    State("folder-path", "value"),
+    State("problem-description", "value"),
+    State("prompt-template", "value"),
+    State("prompt-position", "value"),
+    State({"type": "file_checkbox", "index": ALL}, "id"),
+    State({"type": "file_checkbox", "index": ALL}, "checked")
+)
+def generate_final_prompt(n_clicks,
+                          folder_path,
+                          problem_description,
+                          template_key,
+                          prompt_position,
+                          file_ids,
+                          file_checked):
+    if not n_clicks:
+        return "", False, ""
+
+    if not folder_path or not os.path.isdir(folder_path):
+        return "", False, ""
+
+    selected_files = []
+    if file_ids and file_checked:
+        for fid, checked in zip(file_ids, file_checked):
+            if checked:
+                rel_path = os.path.relpath(fid["index"], folder_path)
+                selected_files.append(rel_path)
+
+    if not selected_files:
+        return "", True, ""
+
+    source_files = read_selected_files(folder_path, selected_files)
+    chosen_template_text = PROMPT_LIBRARY.get(template_key, "")
+    final_prompt = generate_prompt(
+        source_files=source_files,
+        problem_description=problem_description or "",
+        template_text=chosen_template_text,
+        prompt_position=prompt_position
     )
 
-    generate_button = st.button("Generate Prompt")
+    download_link = dbc.Button(
+        "Download Prompt",
+        id="download-btn",
+        href="data:text/plain;charset=utf-8," + final_prompt.replace("\n", "%0A"),
+        download="reasoning_prompt.txt",
+        external_link=True,
+        color="secondary"
+    )
+    return final_prompt, False, download_link
 
-    if generate_button:
-        if not selected_files:
-            st.error("No files selected. Please select at least one.")
-            return
+app.clientside_callback(
+    """
+    function(n_clicks, content) {
+        if(!n_clicks) return null;
+        if(!content) {
+            alert('No text to copy.');
+            return null;
+        }
+        navigator.clipboard.writeText(content);
+        alert('Prompt copied to clipboard!');
+        return null;
+    }
+    """,
+    Output("dummy-store", "data"),
+    Input("copy-prompt-btn", "n_clicks"),
+    State("final-prompt-output", "value"),
+    prevent_initial_call=True
+)
 
-        source_files = read_selected_files(
-            folder_path=folder_path,
-            selected_files=selected_files
-        )
-
-        final_prompt = generate_prompt(
-            source_files=source_files,
-            problem_description=problem_description,
-            template_text=chosen_template_text
-        )
-
-        st.success("Prompt generated successfully!")
-        st.text_area(
-            "Generated Prompt (copy/paste into your o-series model)",
-            final_prompt,
-            height=400
-        )
-        st.download_button(
-            label="Download Prompt",
-            data=final_prompt,
-            file_name="reasoning_prompt.txt",
-            mime="text/plain"
-        )
+server = app.server
 
 if __name__ == "__main__":
-    main()
+    app.run_server(debug=True)
