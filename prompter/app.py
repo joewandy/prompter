@@ -102,6 +102,8 @@ def read_selected_files(folder_path: str, selected_files: List[str]) -> List[Dic
         full_path = os.path.join(folder_path, rel_path)
         display_path = f"{base_folder_name}/{rel_path}"
         content = read_entire_file(full_path)
+        if not content.strip():
+            continue
         source_files.append({
             'filename': rel_path,
             'display_path': display_path,
@@ -269,6 +271,17 @@ app.layout = dmc.MantineProvider(
 
         dbc.Card(
             [
+                dbc.CardHeader("Select Project Folder", style={"backgroundColor": "#eaf2f8"}),
+                dbc.CardBody([
+                    dbc.Label("Folder Path"),
+                    dbc.Input(id="folder-path", type="text", placeholder="Enter path to your folder"),
+                ]),
+            ],
+            style={"marginTop": "25px", "border": "none", "boxShadow": "0 1px 2px 0 rgba(0,0,0,0.2)"}
+        ),
+
+        dbc.Card(
+            [
                 dbc.CardBody(
                     [
                         dbc.Tabs([
@@ -290,10 +303,6 @@ app.layout = dmc.MantineProvider(
                                                 dbc.Row([
                                                     dbc.Col([
                                                         html.H5("Configuration"),
-                                                        dbc.Label("Folder Path"),
-                                                        dbc.Input(id="folder-path", type="text", placeholder="Enter path to your folder"),
-                                                        html.Br(),
-
                                                         dbc.Label("Extension Preset"),
                                                         dcc.Dropdown(
                                                             id="extension-preset",
@@ -340,14 +349,18 @@ app.layout = dmc.MantineProvider(
                                                             color="warning",
                                                             is_open=True
                                                         ),
+                                                        html.Div(
+                                                            id="selected-count",
+                                                            children="0 file(s) selected",
+                                                            style={"marginTop": "15px"}
+                                                        ),
                                                         html.Div(id='filetree_div'),
-                                                        html.Div(id="selected-count", children="0 file(s) selected", style={"marginTop": "15px"})
                                                     ], md=8),
                                                 ], style={"marginTop": "25px"}),
                                             ]
                                         ),
                                     ],
-                                    style={"marginTop": "25px", "borderColor": "#d1e7dd", "borderWidth": "2px"}
+                                    style={"marginTop": "25px", "border": "none", "boxShadow": "0 1px 2px 0 rgba(0,0,0,0.2)"}
                                 ),
 
                                 dbc.Card(
@@ -391,7 +404,7 @@ app.layout = dmc.MantineProvider(
                                             ]
                                         ),
                                     ],
-                                    style={"marginTop": "25px", "borderColor": "#f5c6cb", "borderWidth": "2px"}
+                                    style={"marginTop": "25px", "border": "none", "boxShadow": "0 1px 2px 0 rgba(0,0,0,0.2)"}
                                 ),
                             ]),
                             dbc.Tab(label="Other Feature (Coming Soon)", children=[
@@ -406,7 +419,7 @@ app.layout = dmc.MantineProvider(
                     ]
                 )
             ],
-            style={"marginTop": "25px", "borderColor": "#ccd1d1", "borderWidth": "2px"}
+            style={"marginTop": "25px", "border": "none", "boxShadow": "0 1px 2px 0 rgba(0,0,0,0.2)"}
         )
     ], fluid=True)
 )
