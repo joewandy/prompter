@@ -164,14 +164,12 @@ def generate_prompt(source_files: List[Dict[str, str]], problem_description: str
 
 class FileTree:
     """
-    We'll store all folder paths in a list: self.folders_expanded
-    so we can pass them to Accordion(value=...) for default expansion.
+    We'll store all folder paths so we can expand them by default.
     """
     def __init__(self, filepath: Path, exclusions: List[str], extensions: List[str]):
         self.filepath = filepath
         self.exclusions = exclusions
         self.extensions = extensions
-        # We'll store each folder's str(path) in a list
         self.folders_expanded = []
 
     def flatten(self, input_list):
@@ -213,9 +211,6 @@ class FileTree:
         )
 
     def build_tree(self, path: Path):
-        """
-        For each folder, add str(path) to self.folders_expanded.
-        """
         if is_hidden_or_excluded(str(path), self.exclusions):
             return []
         if path.is_file():
@@ -223,7 +218,6 @@ class FileTree:
                 return [self.build_file(path)]
             else:
                 return []
-        # It's a folder => record str(path)
         self.folders_expanded.append(str(path))
 
         items = sorted(list(path.iterdir()), key=lambda x: x.name)
@@ -238,13 +232,12 @@ class FileTree:
 
     def render(self) -> dmc.Accordion:
         tree_items = self.build_tree(self.filepath)
-        # multiple=True => can open multiple items
-        # value=self.folders_expanded => expand them all by default
         return dmc.Accordion(
             children=tree_items,
             multiple=True,
             value=self.folders_expanded,
-            variant="contained"
+            variant="contained",
+            style={"height": "600px", "overflowY": "auto"}  # fixed height for nicer layout
         )
 
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
@@ -253,6 +246,10 @@ mantine_theme = {
     "fontFamily": "Inter, sans-serif",
     "primaryColor": "indigo",
     "defaultRadius": "sm",
+    # optionally define custom box shadows
+    "shadows": {
+        "md": "0 2px 6px rgba(0,0,0,0.15)"
+    }
 }
 
 app.layout = dmc.MantineProvider(
@@ -319,48 +316,52 @@ app.layout = dmc.MantineProvider(
                             color="warning",
                             is_open=True
                         ),
-                        html.Div(
-                            id='filetree_div',
-                            style={"height": "600px", "overflowY": "auto"}
-                        ),
+                        html.Div(id='filetree_div'),
                         html.Div(id="selected-count", children="0 file(s) selected", style={"marginTop": "15px"})
                     ], md=8),
                 ], style={"marginTop": "25px"}),
 
-                html.Hr(),
-
-                dbc.Row([
-                    dbc.Col([], md=4),
-                    dbc.Col(
-                        dmc.Center(
-                            dbc.Button("Generate Prompt", id="generate-button", color="primary")
-                        ),
-                        md=4
-                    ),
-                    dbc.Col([], md=4),
-                ], style={"marginBottom": "25px"}),
-
-                dbc.Row([
-                    dbc.Col([
-                        html.H4("Describe Your Task or Question"),
-                        dcc.Textarea(
-                            id="problem-description",
-                            style={"width": "100%", "height": "300px"},
-                        )
-                    ], md=6),
-                    dbc.Col([
-                        html.H4("Generated Prompt"),
-                        dcc.Textarea(
-                            id="final-prompt-output",
-                            style={"width": "100%", "height": "300px"},
-                            readOnly=True
+                # Here we place a shadowed panel with a nice border, containing all 3 buttons + the textareas
+                dmc.Paper(
+                    shadow="md",
+                    withBorder=True,
+                    p="md",
+                    style={"marginTop": "30px"},
+                    children=[
+                        dmc.Group(
+                            [
+                                # Generate Prompt
+                                dbc.Button("Generate Prompt", id="generate-button", color="primary"),
+                                # Copy Prompt
+                                dbc.Button("Copy Prompt", id="copy-prompt-btn", color="secondary"),
+                                # Download Prompt (created dynamically, we place an empty span now)
+                                html.Span(id="download-link-container")
+                            ],
+                            gap="sm"
                         ),
                         html.Br(),
-                        dbc.Button("Copy Prompt", id="copy-prompt-btn", color="secondary", style={"marginRight": "10px"}),
-                        html.Span(id="download-link-container", style={"marginRight": "10px"}),
-                        dcc.Store(id="dummy-store", data="")
-                    ], md=6),
-                ], style={"marginBottom": "25px"}),
+                        dbc.Row([
+                            dbc.Col([
+                                html.H4("Describe Your Task or Question"),
+                                dcc.Textarea(
+                                    id="problem-description",
+                                    style={"width": "100%", "height": "300px"},
+                                )
+                            ], md=6),
+
+                            dbc.Col([
+                                html.H4("Generated Prompt"),
+                                dcc.Textarea(
+                                    id="final-prompt-output",
+                                    style={"width": "100%", "height": "300px"},
+                                    readOnly=True
+                                ),
+                                # We'll keep a hidden store for clientside copy logic
+                                dcc.Store(id="dummy-store", data="")
+                            ], md=6)
+                        ])
+                    ]
+                ),
 
             ]),
             dbc.Tab(label="Other Feature (Coming Soon)", children=[
@@ -529,6 +530,7 @@ def generate_final_prompt(n_clicks,
     )
     return final_prompt, False, download_link
 
+# Clientside callback for "Copy Prompt"
 app.clientside_callback(
     """
     function(n_clicks, content) {
