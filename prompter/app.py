@@ -1,111 +1,143 @@
 import os
-import fnmatch
-import time
 import streamlit as st
 from pathlib import Path
-from typing import List, Dict, Optional
+from typing import List, Dict
+
+##########################
+# 1. EXTENSION PRESETS   #
+##########################
+EXTENSION_PRESETS = {
+    "None": "",
+    "Django": ".py, .html, .css, .js",
+    "Machine Learning": ".py, .ipynb, .csv, .txt",
+    "Frontend (JS/TS)": ".html, .css, .js, .ts, .json",
+    "Backend (General)": ".py, .js, .ts, .java, .c, .cpp, .cs, .go, .php",
+}
+
+#############################
+# 2. EXCLUSION PRESET LISTS #
+#############################
+# You can adjust these to suit typical project structures.
+# They will be combined with a base exclusion (below) depending on user's choice.
+EXCLUSION_PRESETS = {
+    "None": [],
+    "Django": ["migrations"],               # Example for Django
+    "Machine Learning": [".ipynb_checkpoints"],  # Common hidden notebook checkpoints
+    "Frontend (JS/TS)": ["node_modules"],   # Common for JS projects
+    "Backend (General)": ["node_modules", "venv"]  # Generic example
+}
+
+###############################
+# 3. BASE EXCLUSIONS & HIDDEN #
+###############################
+BASE_EXCLUDES = [".git", "__pycache__", ".venv"]  # Always excluded by default
 
 ############################################
-# 1. PROMPT LIBRARY (TEMPLATES + Examples) #
+# 4. PROMPT LIBRARY (Minimal / Expandable) #
 ############################################
-# Expanded library for various software/web dev, ML, research, and bioinformatics tasks
+# Short, direct instructions for reasoning models.
 PROMPT_LIBRARY = {
     "None (No Template)": "",
-    "Web Development Bug Fix": (
-        "You are a skilled web developer focusing on debugging issues in front-end or back-end.\n"
-        "Identify the root cause of the bug, then propose a fix.\n"
-        "If reflection is enabled, revisit your fix to ensure it's robust.\n"
+    "Bug Fix / Debug": (
+        "You are a specialized debugging model. Identify the root cause of any bug and propose a succinct fix."
     ),
-    "Backend Refactoring (Microservices)": (
-        "You are an expert in microservices architecture.\n"
-        "Refactor the provided codebase to improve modularity and clarity.\n"
-        "Address any code smells or poor design patterns.\n"
+    "Performance Optimization": (
+        "Optimize the code or architecture for performance improvements, providing a direct, concise approach."
     ),
-    "Machine Learning Model Improvement": (
-        "You specialize in ML model refinement.\n"
-        "Look for opportunities to enhance model performance (regularization, hyperparameter tuning, etc.).\n"
-        "If reflection is enabled, double-check for data leakage or training instability.\n"
+    "Security Audit": (
+        "Review the code for security vulnerabilities. Summarize issues and propose short solutions."
     ),
-    "Data Analysis / Visualization": (
-        "You are a data scientist focusing on analysis and visualization.\n"
-        "Suggest better ways to structure data, create plots, or derive insights.\n"
-        "Consider performance on large datasets.\n"
+    "Refactoring for Clarity": (
+        "Refactor the code to improve readability and maintainability. Provide clear, concise recommendations."
     ),
-    "Academic Research Support": (
-        "You assist in academic research coding tasks.\n"
-        "Pay attention to reproducibility, clarity, and references to relevant literature.\n"
-        "If reflection is enabled, ensure the final code follows best research practices.\n"
+    "Database Schema Advice": (
+        "Review relevant DB schemas or data models. Suggest a concise plan that aligns with best practices."
     ),
-    "Bioinformatics Workflow": (
-        "You are a bioinformatics specialist.\n"
-        "Look for ways to streamline data preprocessing, analysis pipelines (e.g. FASTQ processing,\n"
-        "genome assembly scripts, or protein structure code).\n"
-        "Check for reproducibility and software dependencies.\n"
+    "ML Model Tuning": (
+        "Evaluate the ML code or pipeline. Recommend hyperparameter or structural changes to improve performance. Keep it direct."
+    ),
+    "Bioinformatics Pipeline": (
+        "You are a bioinformatics expert. Suggest succinct improvements for data processing or analysis pipelines."
+    ),
+    "Academic Code Snippet": (
+        "Check the provided academic or research code for correctness and clarity. If needed, propose short fixes."
+    ),
+    "Testing Strategy": (
+        "Propose a concise testing strategy for the given code or system. Outline relevant test cases briefly."
     ),
 }
 
 ###########################################
-# 2. HELPER FUNCTIONS FOR FILE MANAGEMENT #
+# 5. HELPER FUNCTIONS FOR FILE MANAGEMENT #
 ###########################################
-def should_exclude(path: str, exclude_patterns: List[str]) -> bool:
+def should_skip_hidden(item_path: str) -> bool:
     """
-    Checks if a given directory or file path should be excluded
-    based on the exclude_patterns list.
+    Return True if the file or folder is hidden (begins with '.'),
+    or any parent folder is hidden.
     """
-    for pattern in exclude_patterns:
-        pattern = pattern.strip()
-        if not pattern:
-            continue
-        if fnmatch.fnmatch(path, pattern):
-            return True
-        if pattern in path.split(os.sep):
+    base_name = os.path.basename(item_path)
+    if base_name.startswith('.'):
+        return True
+    # Check parents for hidden directories
+    return any(part.startswith('.') for part in Path(item_path).parts)
+
+def should_exclude_path(item_path: str, exclude_list: List[str]) -> bool:
+    """
+    Return True if item_path matches any of the folders in exclude_list.
+    Matching logic: if the exclude token appears in the path's parts.
+    """
+    parts = Path(item_path).parts
+    for ex in exclude_list:
+        ex = ex.strip()
+        if ex and ex in parts:
             return True
     return False
 
-def display_folder_tree(
+def display_folder_files(
     folder_path: str,
     base_folder: str,
     selected_files: List[str],
     extensions: List[str],
-    exclude_patterns: List[str],
-    skip_hidden: bool,
+    exclude_list: List[str],
     level: int = 0
 ):
     """
     Recursively displays the folder structure (indentation-based) and
     creates a checkbox for each file with a matching extension.
-    Those checkboxes are *checked by default*.
+    Skips hidden files/folders and any that match exclude_list.
     """
-    items = sorted(os.listdir(folder_path))
+    try:
+        items = sorted(os.listdir(folder_path))
+    except FileNotFoundError:
+        st.error("Folder not found. Please verify your folder path.")
+        return
+
     for item in items:
         full_item_path = os.path.join(folder_path, item)
 
-        # Skip hidden if desired
-        if skip_hidden and item.startswith('.'):
+        # Skip hidden files/folders
+        if should_skip_hidden(full_item_path):
             continue
 
-        # Check exclusion patterns
-        if should_exclude(full_item_path, exclude_patterns):
+        # Skip excluded folders/files
+        if should_exclude_path(full_item_path, exclude_list):
             continue
-
-        indent = " " * (level * 2)
 
         if os.path.isdir(full_item_path):
-            # Just show the directory with indentation
+            indent = " " * (level * 2)
             st.write(f"{indent}📁 **{item}**")
-            # Recurse
-            display_folder_tree(
+            display_folder_files(
                 folder_path=full_item_path,
                 base_folder=base_folder,
                 selected_files=selected_files,
                 extensions=extensions,
-                exclude_patterns=exclude_patterns,
-                skip_hidden=skip_hidden,
+                exclude_list=exclude_list,
                 level=level + 1
             )
         else:
             # Check extension
             if any(item.lower().endswith(ext) for ext in extensions):
+                indent = " " * (level * 2)
                 rel_path = os.path.relpath(full_item_path, base_folder)
                 label = f"{indent}📄 {item}"
                 checked = st.checkbox(label, value=True, key=full_item_path)
@@ -113,76 +145,35 @@ def display_folder_tree(
                     if rel_path not in selected_files:
                         selected_files.append(rel_path)
 
-def read_file_in_chunks(
-    full_path: str,
-    chunk_size_lines: int,
-    max_file_size_mb: Optional[float] = None
-) -> List[str]:
+def read_entire_file(full_path: str) -> str:
     """
-    Reads a file in line-based chunks, respecting an optional
-    maximum file size limit for truncation. Returns a list of chunk strings.
+    Read an entire file into a single string.
     """
     try:
-        file_size_mb = os.path.getsize(full_path) / (1024 * 1024)
-        if max_file_size_mb and file_size_mb > max_file_size_mb:
-            # Entire file is too large -> Truncate
-            # We'll read first ~100 KB so we at least get some context
-            with open(full_path, 'r', encoding='utf-8', errors='replace') as f:
-                content = f.read(1024 * 100)
-            return [content + f"\n<!-- File truncated, exceeded {max_file_size_mb} MB -->"]
-        else:
-            # Read in chunks by line
-            chunks = []
-            with open(full_path, 'r', encoding='utf-8', errors='replace') as f:
-                current_lines = []
-                line_count = 0
-                for line in f:
-                    current_lines.append(line)
-                    line_count += 1
-                    if line_count >= chunk_size_lines:
-                        chunks.append("".join(current_lines))
-                        current_lines = []
-                        line_count = 0
-                # Remainder
-                if current_lines:
-                    chunks.append("".join(current_lines))
-            return chunks
+        with open(full_path, 'r', encoding='utf-8', errors='replace') as f:
+            return f.read()
     except Exception as e:
-        return [f"<!-- Could not read file: {e} -->"]
+        return f"<!-- Could not read file: {e} -->"
 
 def read_selected_files(
     folder_path: str,
-    selected_files: List[str],
-    chunk_size_lines: int,
-    max_file_size_mb: Optional[float] = None
+    selected_files: List[str]
 ) -> List[Dict[str, str]]:
     """
-    Reads selected files. If chunking is enabled (chunk_size_lines > 0),
-    each chunk is stored as a separate entry with "filename" appended with chunk index.
+    Reads each selected file in full and returns a list of dicts.
     """
     source_files = []
     for rel_path in selected_files:
         full_path = os.path.join(folder_path, rel_path)
-        # Read in chunks
-        chunks = read_file_in_chunks(full_path, chunk_size_lines, max_file_size_mb)
-        if len(chunks) == 1:
-            # Only one chunk => normal single file
-            source_files.append({
-                'filename': rel_path,
-                'content': chunks[0]
-            })
-        else:
-            # Multiple chunks => label them
-            for i, c in enumerate(chunks, start=1):
-                chunk_label = f"{rel_path} (CHUNK {i})"
-                source_files.append({
-                    'filename': chunk_label,
-                    'content': c
-                })
+        content = read_entire_file(full_path)
+        source_files.append({
+            'filename': rel_path,
+            'content': content
+        })
     return source_files
 
 ######################################
-# 3. PROMPT GENERATION & FORMATTING  #
+# 6. PROMPT GENERATION & FORMATTING  #
 ######################################
 def get_language_extension(filename: str) -> str:
     """
@@ -204,178 +195,112 @@ def get_language_extension(filename: str) -> str:
         '.css': 'css',
         '.json': 'json',
         '.ipynb': 'python',  # Jupyter notebooks considered Python
-        '.csv': '',          # plain text
-        # Add more mappings if needed
+        '.csv': '',
+        '.txt': '',
     }
     return mapping.get(ext, '')
 
 def generate_prompt(
     source_files: List[Dict[str, str]],
     problem_description: str,
-    template_text: str,
-    reflection_enabled: bool,
-    step_by_step_instructions: bool,
-    num_solutions: int
+    template_text: str
 ) -> str:
     """
-    Generates a multi-part prompt that includes:
-      1. An optional template from the library (like bug fix, refactoring, etc.).
-      2. Step-by-step instructions (if enabled).
-      3. Code chunks from all selected files.
-      4. User's problem description.
-      5. Reflection stage (if enabled).
-      6. Request for multiple solutions (if num_solutions > 1).
+    Generates a streamlined prompt for a reasoning model:
+      - Optionally starts with a template
+      - Includes the relevant code
+      - States the user's question or task
     """
     prompt_parts = []
 
-    # Start with any chosen template
+    # Template (if any)
     if template_text.strip():
         prompt_parts.append(template_text.strip())
 
-    # If step-by-step is enabled, we add a structured instruction section
-    if step_by_step_instructions:
-        prompt_parts.append(
-            "### Step-by-Step Instructions\n"
-            "1. Understand the code context from the selected files.\n"
-            "2. Address the user's specific problem or goal.\n"
-            "3. Provide your proposed solution(s)."
-        )
-
-    # If multiple solutions requested
-    if num_solutions > 1:
-        prompt_parts.append(
-            f"### Multiple Solutions\n"
-            f"Please provide **{num_solutions} distinct solutions** if possible. "
-            "Explain your reasoning briefly for each approach."
-        )
-
-    # Include code
-    prompt_parts.append("### Selected Project Files\n")
+    # Include code context
+    prompt_parts.append("## Relevant Code")
     for file_info in source_files:
         language = get_language_extension(file_info['filename'])
-        chunk_title = f"File: {file_info['filename']}"
         if language:
             code_block = f"```{language}\n{file_info['content']}\n```"
         else:
             code_block = f"```\n{file_info['content']}\n```"
-        prompt_parts.append(f"**{chunk_title}**\n{code_block}\n")
+        prompt_parts.append(f"**File: {file_info['filename']}**\n{code_block}\n")
 
-    # The user's problem or question
-    prompt_parts.append("### Problem Description")
+    # User's problem
+    prompt_parts.append("## Task or Question")
     final_problem_desc = problem_description.strip() if problem_description.strip() else "No specific description provided."
     prompt_parts.append(final_problem_desc)
-
-    # If reflection is enabled, add reflection stage
-    if reflection_enabled:
-        reflection_text = (
-            "### Reflection Stage\n"
-            "After proposing your solution(s), reflect on them:\n"
-            " - Check for undefined variables or missing imports.\n"
-            " - Ensure it meets the user's needs.\n"
-            " - If you see any mistakes, correct them and finalize your solution."
-        )
-        prompt_parts.append(reflection_text)
 
     final_prompt = "\n\n".join(prompt_parts).strip()
     return final_prompt
 
 ############################
-# 4. STREAMLIT MAIN APP    #
+# 7. STREAMLIT MAIN APP    #
 ############################
 def main():
-    st.set_page_config(page_title="Advanced ChatGPT Prompt Generator", layout="wide")
-    st.title("📝 Advanced ChatGPT Prompt Generator")
+    st.set_page_config(page_title="Prompter for Reasoning Models", layout="wide")
+    st.title("🔎 Prompter for Reasoning Models")
 
+    # Usage instructions (condensed into a paragraph)
     st.markdown("""
-    This application integrates multiple **prompt engineering best practices**:
-    - **Prompt Library**: Reuse well-crafted templates for software/web dev, ML, academic research, bioinformatics, etc.
-    - **Step-by-Step Instructions** (Mishra et al. 2022, Wei et al. 2022): Encourage structured reasoning.
-    - **Multiple Solutions** (Wang et al. 2022): Generating several drafts can improve correctness via self-consistency.
-    - **Reflection Technique** (Madaan et al. 2023): The model critiques its own solution to catch errors.
-    - **Chunking Large Files**: Splits big files into smaller parts to avoid token limit issues.
-
-    For more background:
-    - [Chain-of-Thought Prompting Elicits Reasoning](https://arxiv.org/abs/2201.11903)
-    - [Self-Refine: Iterative Refinement with Natural Language Feedback](https://arxiv.org/abs/2303.17651)
-    - [Self-Consistency Improves Chain of Thought Reasoning](https://arxiv.org/abs/2203.11171)
+    **Welcome to Prompter** – a lightweight tool for assembling concise, direct prompts for OpenAI _reasoning models_ like **o1** or **o3-mini**. Choose a folder, select relevant files, optionally pick an extension preset or template, then provide a brief description of your question. After generating, copy the output into your reasoning model’s interface. By keeping prompts short and unambiguous, and letting the model do its own internal reasoning, you'll often see more accurate results.
     """)
 
-    # --- Sidebar Config ---
     st.sidebar.header("Configuration")
 
+    # Folder path input
     folder_path = st.sidebar.text_input(
         "Folder Path",
         value="",
         placeholder="Enter path to your project folder"
     )
+
+    # Extension Preset
+    preset_label = st.sidebar.selectbox(
+        "Extension Preset",
+        list(EXTENSION_PRESETS.keys()),
+        index=0
+    )
+    preset_extensions = EXTENSION_PRESETS[preset_label]
+
+    # Extension override
     extensions_input = st.sidebar.text_input(
-        "File Extensions",
-        value=".py, .js, .ts, .html, .css, .java, .c, .cpp, .cs, .rb, .go, .php, .json, .ipynb, .csv",
-        placeholder="Comma-separated, e.g., .py, .js, .ts",
-        help="These are the extensions we'll scan for in your folder."
+        "File Extensions (override or add to preset)",
+        value=preset_extensions,
+        placeholder="Comma-separated e.g. .py, .js, .ts"
     )
 
-    skip_hidden = st.sidebar.checkbox(
-        "Skip Hidden Files/Folders",
-        value=True,
-        help="If checked, items starting with '.' will be ignored."
-    )
+    # Exclusion preset combination
+    base_excludes = BASE_EXCLUDES.copy()
+    preset_exclusions = EXCLUSION_PRESETS.get(preset_label, [])
+    combined_exclusions = list(set(base_excludes + preset_exclusions))
 
-    exclude_input = st.sidebar.text_input(
-        "Exclude Patterns",
-        value=".git, node_modules, venv, .DS_Store",
-        placeholder="Comma-separated patterns (e.g. node_modules, venv)"
+    # Display / override exclusion
+    exclusion_str = ", ".join(combined_exclusions)
+    user_exclusion_input = st.sidebar.text_input(
+        "Excluded Folders (override below)",
+        value=exclusion_str
     )
+    # Convert user override into list
+    final_exclusions = [ex.strip() for ex in user_exclusion_input.split(',') if ex.strip()]
 
-    max_file_size = st.sidebar.number_input(
-        "Max File Size (MB, 0 for unlimited)",
-        min_value=0.0,
-        value=0.0,
-        help="If a file exceeds this size, we'll truncate it to ~100KB. 0 = no limit."
-    )
-
-    chunk_size_lines = st.sidebar.number_input(
-        "Chunk Size (lines, 0 to disable chunking)",
-        min_value=0,
-        value=0,
-        help="If > 0, we split each file into chunks of this many lines."
-    )
-
-    # Prompt library
-    st.sidebar.subheader("Prompt Library")
+    # Prompt Template (Optional)
+    st.sidebar.subheader("Prompt Template (Optional)")
     template_options = list(PROMPT_LIBRARY.keys())
     selected_template_key = st.sidebar.selectbox(
-        "Choose a Prompt Template",
+        "Choose a Template",
         template_options,
         index=0
     )
     chosen_template_text = PROMPT_LIBRARY.get(selected_template_key, "")
 
-    # Additional advanced settings
-    step_by_step_instructions = st.sidebar.checkbox(
-        "Step-by-Step Instructions",
-        value=True,
-        help="Adds a structured list of steps in the prompt."
-    )
-    reflection_enabled = st.sidebar.checkbox(
-        "Reflection Stage",
-        value=True,
-        help="Requests the model to review its own solution for mistakes."
-    )
-    num_solutions = st.sidebar.slider(
-        "Number of Solutions",
-        min_value=1,
-        max_value=3,
-        value=1,
-        help="If more than 1, the model is prompted to provide multiple distinct answers."
-    )
-
-    # Main content
+    # Validate folder
     if not folder_path or not os.path.isdir(folder_path):
         st.warning("Please enter a valid folder path above.")
         st.stop()
 
-    # Convert extension string to a list, ensuring each has a leading dot
+    # Convert extension string to a list
     extensions = []
     for ext in extensions_input.split(','):
         e = ext.strip().lower()
@@ -384,76 +309,55 @@ def main():
         if e:
             extensions.append(e)
 
-    # Prepare exclusion patterns
-    exclusion_patterns = []
-    if exclude_input.strip():
-        exclusion_patterns = [pat.strip() for pat in exclude_input.split(',') if pat.strip()]
-
     st.header("Select Files")
-    with st.expander("📁 Folder Browser (collapsed by default)", expanded=False):
+    with st.expander("Folder Browser (hidden + excluded folders skipped)", expanded=True):
         selected_files = []
-        display_folder_tree(
+        display_folder_files(
             folder_path=folder_path,
             base_folder=folder_path,
             selected_files=selected_files,
             extensions=extensions,
-            exclude_patterns=exclusion_patterns,
-            skip_hidden=skip_hidden,
-            level=0
+            exclude_list=final_exclusions
         )
+
     st.markdown(f"**{len(selected_files)} file(s) selected**")
 
-    # Text area for the user's problem description
     problem_description = st.text_area(
-        "Problem Description",
+        "Describe Your Task or Question",
         height=150,
-        placeholder="Describe your issue, goal, or question here..."
+        placeholder="e.g., Summarize this code or find potential bugs..."
     )
 
-    # Generate button
     generate_button = st.button("Generate Prompt")
 
     if generate_button:
         if not selected_files:
             st.error("No files selected. Please select at least one.")
-            st.stop()
-
-        st.info("Reading selected files...")
-        max_size = max_file_size if max_file_size > 0 else None
-        effective_chunk_size = chunk_size_lines if chunk_size_lines > 0 else 999999999
+            return
 
         source_files = read_selected_files(
             folder_path=folder_path,
-            selected_files=selected_files,
-            chunk_size_lines=effective_chunk_size,
-            max_file_size_mb=max_size
+            selected_files=selected_files
         )
 
         final_prompt = generate_prompt(
             source_files=source_files,
             problem_description=problem_description,
-            template_text=chosen_template_text,
-            reflection_enabled=reflection_enabled,
-            step_by_step_instructions=step_by_step_instructions,
-            num_solutions=num_solutions
+            template_text=chosen_template_text
         )
 
         st.success("Prompt generated successfully!")
-        st.text_area("Generated Prompt", final_prompt, height=400)
+        st.text_area(
+            "Generated Prompt (copy/paste into your o-series model)",
+            final_prompt,
+            height=400
+        )
         st.download_button(
             label="Download Prompt",
             data=final_prompt,
-            file_name="chatgpt_prompt.txt",
+            file_name="reasoning_prompt.txt",
             mime="text/plain"
         )
-
-    st.markdown("""
-    ---
-    **References and Further Reading**  
-    - [Chain-of-Thought Prompting Elicits Reasoning in Large Language Models (Wei et al. 2022)](https://arxiv.org/abs/2201.11903)  
-    - [Self-Refine: Iterative Refinement with Natural Language Feedback (Madaan et al. 2023)](https://arxiv.org/abs/2303.17651)  
-    - [Self-Consistency Improves Chain of Thought Reasoning (Wang et al. 2022)](https://arxiv.org/abs/2203.11171)
-    """)
 
 if __name__ == "__main__":
     main()
