@@ -141,9 +141,9 @@ def generate_prompt(source_files: List[Dict[str, str]], problem_description: str
     for file_info in source_files:
         language = get_language_extension(file_info['filename'])
         if language:
-            code_block = f"\n```{language}\n{file_info['content']}\n```\n"
+            code_block = f"\n{file_info['content']}\n"
         else:
-            code_block = f"\n```\n{file_info['content']}\n```\n"
+            code_block = f"\n{file_info['content']}\n"
         code_section.append(
             f"**File: {file_info['display_path']}**\n{code_block}"
         )
@@ -151,6 +151,10 @@ def generate_prompt(source_files: List[Dict[str, str]], problem_description: str
 
     tmpl = template_text.strip()
     prob = problem_description.strip()
+
+    # If no template and no problem description, just return the code section
+    if not tmpl and not prob:
+        return code_block_str
 
     if prompt_position == "After Template":
         return (f"{tmpl}\n\n{code_block_str}\n\n## Problem\n{prob}").strip()
@@ -237,7 +241,7 @@ class FileTree:
             multiple=True,
             value=self.folders_expanded,
             variant="contained",
-            style={"height": "600px", "overflowY": "auto"}  # fixed height for nicer layout
+            style={"height": "600px", "overflowY": "auto"}
         )
 
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
@@ -245,130 +249,165 @@ app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
 mantine_theme = {
     "fontFamily": "Inter, sans-serif",
     "primaryColor": "indigo",
-    "defaultRadius": "sm",
-    # optionally define custom box shadows
-    "shadows": {
-        "md": "0 2px 6px rgba(0,0,0,0.15)"
-    }
+    "defaultRadius": "sm"
 }
 
 app.layout = dmc.MantineProvider(
     theme=mantine_theme,
     children=dbc.Container([
-        html.H2("🔎 Prompter for Reasoning Models"),
-        html.P("A multi-tab application that helps assemble prompts from code or handle other features."),
+        html.H2("🔎 Prompter for Reasoning Models", style={"color": "#2c3e50"}),
+        html.P(
+            "Welcome to the 🏆 ultimate prompter solution for your coding projects. "
+            "This interactive multi-tab application is designed to gather code snippets "
+            "from your entire project, letting you quickly assemble an entire prompt. "
+            "Use it to highlight relevant sections of your code to guide your reasoning model. "
+            "Additional features are in the pipeline to enhance your developer experience. "
+            "Whether you need debugging support, performance tuning, or code reviews, "
+            "our prompter streamlines the process by consolidating your code context "
+            "and problem statements all in one place. Stay tuned for more updates!"
+        ),
 
-        dbc.Tabs([
-            dbc.Tab(label="Prompter", children=[
-                html.Br(),
-                html.P("This tab helps you gather code from a folder and generate a concise prompt."),
-
-                dbc.Row([
-                    dbc.Col([
-                        html.H5("Configuration"),
-                        dbc.Label("Folder Path"),
-                        dbc.Input(id="folder-path", type="text", placeholder="Enter path to your folder"),
-                        html.Br(),
-
-                        dbc.Label("Extension Preset"),
-                        dcc.Dropdown(
-                            id="extension-preset",
-                            options=[{"label": k, "value": k} for k in EXTENSION_PRESETS.keys()],
-                            value="None"
-                        ),
-                        html.Br(),
-
-                        dbc.Label("File Extensions"),
-                        dbc.Input(id="file-extensions", type="text", placeholder=".py, .js, .ts"),
-                        html.Br(),
-
-                        dbc.Label("Current Exclusion List"),
-                        dbc.Input(id="exclusions-field", type="text", placeholder=".git, .gitignore, .pycache"),
-                        html.Br(),
-
-                        dbc.Label("Prompt Template (Optional)"),
-                        dcc.Dropdown(
-                            id="prompt-template",
-                            options=[{"label": k, "value": k} for k in PROMPT_LIBRARY.keys()],
-                            value="None (No Template)"
-                        ),
-                        html.Br(),
-
-                        dbc.Label("Prompt Position"),
-                        dbc.RadioItems(
-                            id="prompt-position",
-                            options=[
-                                {"label": "After Template", "value": "After Template"},
-                                {"label": "Top Combined", "value": "Top Combined"},
-                                {"label": "Top Separate", "value": "Top Separate"},
-                            ],
-                            value="After Template"
-                        ),
-                        html.Br(),
-                        dbc.Alert(id="alert-no-files", color="danger", is_open=False),
-                    ], md=4),
-
-                    dbc.Col([
-                        html.H5("File/Folder Tree"),
-                        dbc.Alert(
-                            "Enter a valid folder path to see contents.",
-                            id="folder-warning",
-                            color="warning",
-                            is_open=True
-                        ),
-                        html.Div(id='filetree_div'),
-                        html.Div(id="selected-count", children="0 file(s) selected", style={"marginTop": "15px"})
-                    ], md=8),
-                ], style={"marginTop": "25px"}),
-
-                # Here we place a shadowed panel with a nice border, containing all 3 buttons + the textareas
-                dmc.Paper(
-                    shadow="md",
-                    withBorder=True,
-                    p="md",
-                    style={"marginTop": "30px"},
-                    children=[
-                        dmc.Group(
-                            [
-                                # Generate Prompt
-                                dbc.Button("Generate Prompt", id="generate-button", color="primary"),
-                                # Copy Prompt
-                                dbc.Button("Copy Prompt", id="copy-prompt-btn", color="secondary"),
-                                # Download Prompt (created dynamically, we place an empty span now)
-                                html.Span(id="download-link-container")
-                            ],
-                            gap="sm"
-                        ),
-                        html.Br(),
-                        dbc.Row([
-                            dbc.Col([
-                                html.H4("Describe Your Task or Question"),
-                                dcc.Textarea(
-                                    id="problem-description",
-                                    style={"width": "100%", "height": "300px"},
-                                )
-                            ], md=6),
-
-                            dbc.Col([
-                                html.H4("Generated Prompt"),
-                                dcc.Textarea(
-                                    id="final-prompt-output",
-                                    style={"width": "100%", "height": "300px"},
-                                    readOnly=True
+        dbc.Card(
+            [
+                dbc.CardBody(
+                    [
+                        dbc.Tabs([
+                            dbc.Tab(label="Prompter", children=[
+                                html.Br(),
+                                html.P(
+                                    "This tab is your main interface to gather and assemble code from the specified "
+                                    "folder or directory. You can select which files to include, preview your choices, "
+                                    "and generate a complete prompt. Perfect for debugging sessions, code reviews, or "
+                                    "any scenario needing a thorough code context for your reasoning model. "
+                                    "Just point to your folder, pick file extensions, and you're ready to go! 🚀"
                                 ),
-                                # We'll keep a hidden store for clientside copy logic
-                                dcc.Store(id="dummy-store", data="")
-                            ], md=6)
+
+                                dbc.Card(
+                                    [
+                                        dbc.CardHeader("🛠️ Configuration", style={"backgroundColor": "#eaf2f8"}),
+                                        dbc.CardBody(
+                                            [
+                                                dbc.Row([
+                                                    dbc.Col([
+                                                        html.H5("Configuration"),
+                                                        dbc.Label("Folder Path"),
+                                                        dbc.Input(id="folder-path", type="text", placeholder="Enter path to your folder"),
+                                                        html.Br(),
+
+                                                        dbc.Label("Extension Preset"),
+                                                        dcc.Dropdown(
+                                                            id="extension-preset",
+                                                            options=[{"label": k, "value": k} for k in EXTENSION_PRESETS.keys()],
+                                                            value="None"
+                                                        ),
+                                                        html.Br(),
+
+                                                        dbc.Label("File Extensions"),
+                                                        dbc.Input(id="file-extensions", type="text", placeholder=".py, .js, .ts"),
+                                                        html.Br(),
+
+                                                        dbc.Label("Current Exclusion List"),
+                                                        dbc.Input(id="exclusions-field", type="text", placeholder=".git, .gitignore, .pycache"),
+                                                        html.Br(),
+
+                                                        dbc.Label("Prompt Template (Optional)"),
+                                                        dcc.Dropdown(
+                                                            id="prompt-template",
+                                                            options=[{"label": k, "value": k} for k in PROMPT_LIBRARY.keys()],
+                                                            value="None (No Template)"
+                                                        ),
+                                                        html.Br(),
+
+                                                        dbc.Label("Prompt Position"),
+                                                        dbc.RadioItems(
+                                                            id="prompt-position",
+                                                            options=[
+                                                                {"label": "After Template", "value": "After Template"},
+                                                                {"label": "Top Combined", "value": "Top Combined"},
+                                                                {"label": "Top Separate", "value": "Top Separate"},
+                                                            ],
+                                                            value="After Template"
+                                                        ),
+                                                        html.Br(),
+                                                        dbc.Alert(id="alert-no-files", color="danger", is_open=False),
+                                                    ], md=4),
+
+                                                    dbc.Col([
+                                                        html.H5("File/Folder Tree"),
+                                                        dbc.Alert(
+                                                            "Enter a valid folder path to see contents.",
+                                                            id="folder-warning",
+                                                            color="warning",
+                                                            is_open=True
+                                                        ),
+                                                        html.Div(id='filetree_div'),
+                                                        html.Div(id="selected-count", children="0 file(s) selected", style={"marginTop": "15px"})
+                                                    ], md=8),
+                                                ], style={"marginTop": "25px"}),
+                                            ]
+                                        ),
+                                    ],
+                                    style={"marginTop": "25px", "borderColor": "#d1e7dd", "borderWidth": "2px"}
+                                ),
+
+                                dbc.Card(
+                                    [
+                                        dbc.CardHeader("✏️ Prompt Generation", style={"backgroundColor": "#fcf0e6"}),
+                                        dbc.CardBody(
+                                            [
+                                                dmc.Paper(
+                                                    p="md",
+                                                    style={"marginTop": "30px"},
+                                                    children=[
+                                                        dmc.Group(
+                                                            [
+                                                                dbc.Button("Generate Prompt", id="generate-button", color="primary"),
+                                                                dbc.Button("Copy Prompt", id="copy-prompt-btn", color="secondary"),
+                                                                html.Span(id="download-link-container")
+                                                            ],
+                                                            gap="sm"
+                                                        ),
+                                                        html.Br(),
+                                                        dbc.Row([
+                                                            dbc.Col([
+                                                                html.H4("Describe Your Task or Question"),
+                                                                dcc.Textarea(
+                                                                    id="problem-description",
+                                                                    style={"width": "100%", "height": "300px"},
+                                                                )
+                                                            ], md=6),
+                                                            dbc.Col([
+                                                                html.H4("Generated Prompt"),
+                                                                dcc.Textarea(
+                                                                    id="final-prompt-output",
+                                                                    style={"width": "100%", "height": "300px"},
+                                                                    readOnly=True
+                                                                ),
+                                                                dcc.Store(id="dummy-store", data="")
+                                                            ], md=6)
+                                                        ])
+                                                    ]
+                                                ),
+                                            ]
+                                        ),
+                                    ],
+                                    style={"marginTop": "25px", "borderColor": "#f5c6cb", "borderWidth": "2px"}
+                                ),
+                            ]),
+                            dbc.Tab(label="Other Feature (Coming Soon)", children=[
+                                html.Br(),
+                                html.H2("Another feature will go here in the future!"),
+                                html.P(
+                                    "We're planning additional functionalities to further enhance your experience. "
+                                    "Stay tuned for more updates and improvements in upcoming versions!"
+                                )
+                            ])
                         ])
                     ]
-                ),
-
-            ]),
-            dbc.Tab(label="Other Feature (Coming Soon)", children=[
-                html.Br(),
-                html.H2("Another feature will go here in the future!")
-            ])
-        ])
+                )
+            ],
+            style={"marginTop": "25px", "borderColor": "#ccd1d1", "borderWidth": "2px"}
+        )
     ], fluid=True)
 )
 
@@ -520,10 +559,13 @@ def generate_final_prompt(n_clicks,
         prompt_position=prompt_position
     )
 
+    # Ensure we properly encode special chars so the entire final prompt is included
+    final_prompt_encoded = final_prompt.replace("\n", "%0A").replace("#", "%23")
+
     download_link = dbc.Button(
         "Download Prompt",
         id="download-btn",
-        href="data:text/plain;charset=utf-8," + final_prompt.replace("\n", "%0A"),
+        href="data:text/plain;charset=utf-8," + final_prompt_encoded,
         download="reasoning_prompt.txt",
         external_link=True,
         color="secondary"
