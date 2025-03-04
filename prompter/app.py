@@ -264,7 +264,7 @@ def generate_prompt(source_files: List[Dict[str, str]],
     ofmt = output_format_text.strip()
     if ofmt:
         sections.append("### Output Format ###\n\n" + ofmt)
-
+ 
     # Relevant Code
     code_section = ["### Relevant Code ###"]
     for file_info in source_files:
