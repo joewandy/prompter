@@ -1,7 +1,6 @@
 import difflib
 import fnmatch
 import os
-import re
 from pathlib import Path
 from typing import List, Dict
 
@@ -67,34 +66,6 @@ PROMPT_LIBRARY = {
     "Security Audit": "Review code for security issues. Provide short, direct mitigations.",
     "Testing Strategy": "Propose a concise testing strategy for the given code or system.",
 }
-
-# Legacy regex and parser kept for reference, not actively used
-file_pattern = re.compile(r'^\s*file\s*:\s*(.*)', re.IGNORECASE)
-
-
-def parse_llm_response_legacy(text: str) -> List[Dict[str, str]]:
-    lines = text.splitlines()
-    blocks = []
-    current_file = None
-    current_content = []
-    for line in lines:
-        match = file_pattern.match(line)
-        if match:
-            if current_file and current_content:
-                blocks.append({
-                    "filename": current_file,
-                    "new_content": "\n".join(current_content).rstrip()
-                })
-            current_file = match.group(1).strip()
-            current_content = []
-        else:
-            current_content.append(line)
-    if current_file and current_content:
-        blocks.append({
-            "filename": current_file,
-            "new_content": "\n".join(current_content).rstrip()
-        })
-    return blocks
 
 
 class LLMUpdateParser:
@@ -274,23 +245,28 @@ def generate_prompt(source_files: List[Dict[str, str]],
                     template_text: str) -> str:
     sections = []
 
+    # Template (Optional)
+    tmpl = template_text.strip()
+    if tmpl:
+        sections.append("### Template ###\n" + tmpl)
+
     # Problem Statement
     prob = problem_description.strip()
     if prob:
-        sections.append("# Problem Statement\n" + prob)
+        sections.append("### Problem Statement ###\n" + prob)
 
     # Constraints / Warnings
     cw = constraints_warnings.strip()
     if cw:
-        sections.append("# Constraints / Warnings\n" + cw)
+        sections.append("### Constraints / Warnings ###\n" + cw)
 
     # Output Format
     ofmt = output_format_text.strip()
     if ofmt:
-        sections.append("# Output Format\n" + ofmt)
+        sections.append("### Output Format ###\n\n" + ofmt)
 
     # Relevant Code
-    code_section = ["# Relevant Code"]
+    code_section = ["### Relevant Code ###"]
     for file_info in source_files:
         language = get_language_extension(file_info['filename'])
         if language:
@@ -306,11 +282,6 @@ def generate_prompt(source_files: List[Dict[str, str]],
     addl = additional_info.strip()
     if addl:
         sections.append("# Additional Information\n" + addl)
-
-    # Template (Optional)
-    tmpl = template_text.strip()
-    if tmpl:
-        sections.append("# Template\n" + tmpl)
 
     return "\n\n".join(sections).strip()
 
@@ -547,7 +518,7 @@ app.layout = dmc.MantineProvider(
                                                                 dcc.Textarea(
                                                                     id="output-format",
                                                                     style={"width": "100%", "height": "200px"},
-                                                                    value="file: path/to/file.ext\n--- START CODE ---\n<entire new content for that file>\n--- END CODE ---\n\nRepeat the above block for each file changed.\n\nExample:\nfile: src/main.py\n--- START CODE ---\ndef my_function():\n    print(\"Hello World!\")\n--- END CODE ---\n\nfile: requirements.txt\n--- START CODE ---\nrequests==2.25.1\nnumpy==1.20.0\n--- END CODE ---"
+                                                                    value="--- START CODE ---\nfile: path/to/file.ext\n<entire new content for that file>\n--- END CODE ---\n\nRepeat the above block for each file changed."
                                                                 )
                                                             ], md=6),
                                                         ]),
