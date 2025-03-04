@@ -71,6 +71,7 @@ PROMPT_LIBRARY = {
 # Legacy regex and parser kept for reference, not actively used
 file_pattern = re.compile(r'^\s*file\s*:\s*(.*)', re.IGNORECASE)
 
+
 def parse_llm_response_legacy(text: str) -> List[Dict[str, str]]:
     lines = text.splitlines()
     blocks = []
@@ -95,6 +96,7 @@ def parse_llm_response_legacy(text: str) -> List[Dict[str, str]]:
         })
     return blocks
 
+
 class LLMUpdateParser:
     """
     A dedicated parser class to handle the specified output format:
@@ -103,6 +105,7 @@ class LLMUpdateParser:
     ...
     --- END CODE ---
     """
+
     def parse_response(self, text: str) -> (List[Dict[str, str]], str):
         lines = text.splitlines()
         blocks = []
@@ -120,12 +123,12 @@ class LLMUpdateParser:
             if line_stripped.lower().startswith("file:"):
                 # If we were still in a code block, that means we didn't see '--- END CODE ---'
                 if in_code_block:
-                    error_message = f"Missing '--- END CODE ---' before starting new file block at line {idx+1}"
+                    error_message = f"Missing '--- END CODE ---' before starting new file block at line {idx + 1}"
                     return [], error_message
 
                 parts = line_stripped.split(":", 1)
                 if len(parts) < 2:
-                    error_message = f"Invalid file line at line {idx+1}"
+                    error_message = f"Invalid file line at line {idx + 1}"
                     return [], error_message
 
                 filename = parts[1].strip()
@@ -142,7 +145,7 @@ class LLMUpdateParser:
                 else:
                     error_message = (
                         f"Expected '--- START CODE ---' after file line for file '{current_file}' "
-                        f"but got '{line_stripped}' at line {idx+1}"
+                        f"but got '{line_stripped}' at line {idx + 1}"
                     )
                     return [], error_message
                 continue
@@ -168,6 +171,7 @@ class LLMUpdateParser:
 
         return blocks, error_message
 
+
 def generate_side_by_side_diff(original: str, new_content: str, filename: str) -> str:
     if not original and not new_content:
         return f"File '{filename}' is empty both before and after."
@@ -179,6 +183,7 @@ def generate_side_by_side_diff(original: str, new_content: str, filename: str) -
     )
     return diff_html
 
+
 def is_hidden_or_excluded(path: str, exclusion_list: List[str]) -> bool:
     p = Path(path)
     if any(part.startswith('.') for part in p.parts):
@@ -189,6 +194,7 @@ def is_hidden_or_excluded(path: str, exclusion_list: List[str]) -> bool:
         if fnmatch.fnmatch(path, f"*{pattern}*"):
             return True
     return False
+
 
 def add_all_files(folder_path: str, base_path: str, extensions: List[str], exclusion_list: List[str],
                   selected_files: List[str]):
@@ -206,12 +212,14 @@ def add_all_files(folder_path: str, base_path: str, extensions: List[str], exclu
                 if rel_path not in selected_files:
                     selected_files.append(rel_path)
 
+
 def read_entire_file(full_path: str) -> str:
     try:
         with open(full_path, 'r', encoding='utf-8', errors='replace') as f:
             return f.read()
     except Exception as e:
         return f"<!-- Could not read file: {e} -->"
+
 
 def read_selected_files(folder_path: str, selected_files: List[str]) -> List[Dict[str, str]]:
     base_folder_name = os.path.basename(folder_path.rstrip("/"))
@@ -228,6 +236,7 @@ def read_selected_files(folder_path: str, selected_files: List[str]) -> List[Dic
             'content': content,
         })
     return source_files
+
 
 def get_language_extension(filename: str) -> str:
     ext = Path(filename).suffix.lower()
@@ -256,24 +265,29 @@ def get_language_extension(filename: str) -> str:
     }
     return mapping.get(ext, '')
 
-def generate_prompt(source_files: List[Dict[str, str]], problem_description: str, template_text: str,
-                    additional_info: str) -> str:
-    sections = []
 
-    # Template
-    tmpl = template_text.strip()
-    if tmpl:
-        sections.append("# Template\n" + tmpl)
+def generate_prompt(source_files: List[Dict[str, str]],
+                    problem_description: str,
+                    constraints_warnings: str,
+                    output_format_text: str,
+                    additional_info: str,
+                    template_text: str) -> str:
+    sections = []
 
     # Problem Statement
     prob = problem_description.strip()
     if prob:
         sections.append("# Problem Statement\n" + prob)
 
-    # Additional Information
-    addl = additional_info.strip()
-    if addl:
-        sections.append("# Additional Information\n" + addl)
+    # Constraints / Warnings
+    cw = constraints_warnings.strip()
+    if cw:
+        sections.append("# Constraints / Warnings\n" + cw)
+
+    # Output Format
+    ofmt = output_format_text.strip()
+    if ofmt:
+        sections.append("# Output Format\n" + ofmt)
 
     # Relevant Code
     code_section = ["# Relevant Code"]
@@ -288,32 +302,18 @@ def generate_prompt(source_files: List[Dict[str, str]], problem_description: str
         )
     sections.append("\n\n".join(code_section))
 
-    # Output Format Instructions
-    output_format_instructions = """# Output Format
-Please produce your changes in the following format:
+    # Additional Information
+    addl = additional_info.strip()
+    if addl:
+        sections.append("# Additional Information\n" + addl)
 
-file: path/to/file.ext
---- START CODE ---
-<entire new content for that file>
---- END CODE ---
-
-Repeat the above block for each file changed.
-
-Example:
-file: src/main.py
---- START CODE ---
-def my_function():
-    print("Hello World!")
---- END CODE ---
-file: requirements.txt
---- START CODE ---
-requests==2.25.1
-numpy==1.20.0
---- END CODE ---
-"""
-    sections.append(output_format_instructions.strip())
+    # Template (Optional)
+    tmpl = template_text.strip()
+    if tmpl:
+        sections.append("# Template\n" + tmpl)
 
     return "\n\n".join(sections).strip()
+
 
 class FileTree:
     """
@@ -393,6 +393,7 @@ class FileTree:
             variant="contained",
             style={"height": "400px", "overflowY": "auto"}
         )
+
 
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
 
@@ -530,7 +531,29 @@ app.layout = dmc.MantineProvider(
                                                                 )
                                                             ], md=6),
                                                         ]),
+
                                                         html.Br(),
+
+                                                        dbc.Row([
+                                                            dbc.Col([
+                                                                html.H4("Constraints / Warnings"),
+                                                                dcc.Textarea(
+                                                                    id="constraints-warnings",
+                                                                    style={"width": "100%", "height": "200px"},
+                                                                )
+                                                            ], md=6),
+                                                            dbc.Col([
+                                                                html.H4("Output Format"),
+                                                                dcc.Textarea(
+                                                                    id="output-format",
+                                                                    style={"width": "100%", "height": "200px"},
+                                                                    value="file: path/to/file.ext\n--- START CODE ---\n<entire new content for that file>\n--- END CODE ---\n\nRepeat the above block for each file changed.\n\nExample:\nfile: src/main.py\n--- START CODE ---\ndef my_function():\n    print(\"Hello World!\")\n--- END CODE ---\n\nfile: requirements.txt\n--- START CODE ---\nrequests==2.25.1\nnumpy==1.20.0\n--- END CODE ---"
+                                                                )
+                                                            ], md=6),
+                                                        ]),
+
+                                                        html.Br(),
+
                                                         dbc.Row([
                                                             dbc.Col([
                                                                 dbc.Button("Generate Prompt", id="generate-button",
@@ -545,7 +568,9 @@ app.layout = dmc.MantineProvider(
                                                                 )
                                                             ], width=12),
                                                         ]),
+
                                                         html.Br(),
+
                                                         dbc.Row([
                                                             dbc.Col([
                                                                 html.H4("Generated Prompt"),
@@ -607,6 +632,7 @@ app.layout = dmc.MantineProvider(
     ], fluid=True)
 )
 
+
 @app.callback(
     Output("file-extensions", "value"),
     Output("exclusions-field", "value"),
@@ -622,6 +648,7 @@ def sync_fields_with_preset(preset_label):
 
     excl_text = ", ".join(sorted(list(base_exclusion_set)))
     return preset_extensions, excl_text
+
 
 @app.callback(
     Output("folder-warning", "is_open"),
@@ -656,6 +683,7 @@ def update_file_tree(folder_path, file_ext_string, exclusion_string):
         extensions=extensions
     )
     return False, tree_obj.render()
+
 
 @app.callback(
     Output({"type": "file_checkbox", "index": ALL}, "checked"),
@@ -727,6 +755,7 @@ def toggle_folder_files(folder_check_values, folder_ids, old_folder_check_values
 
     return new_file_states, new_folder_states
 
+
 @app.callback(
     Output("selected-count", "children"),
     Input({"type": "file_checkbox", "index": ALL}, "checked"),
@@ -737,6 +766,7 @@ def count_selected_files(file_check_values):
         return "0 file(s) selected"
     return f"{sum(bool(v) for v in file_check_values)} file(s) selected"
 
+
 @app.callback(
     Output("final-prompt-output", "value"),
     Output("alert-no-files", "is_open"),
@@ -744,6 +774,8 @@ def count_selected_files(file_check_values):
     Input("generate-button", "n_clicks"),
     State("folder-path", "value"),
     State("problem-description", "value"),
+    State("constraints-warnings", "value"),
+    State("output-format", "value"),
     State("additional-info", "value"),
     State("prompt-template", "value"),
     State({"type": "file_checkbox", "index": ALL}, "id"),
@@ -752,6 +784,8 @@ def count_selected_files(file_check_values):
 def generate_final_prompt(n_clicks,
                           folder_path,
                           problem_description,
+                          constraints_warnings,
+                          output_format_text,
                           additional_info,
                           template_key,
                           file_ids,
@@ -776,8 +810,10 @@ def generate_final_prompt(n_clicks,
     final_prompt = generate_prompt(
         source_files=source_files,
         problem_description=problem_description or "",
-        template_text=chosen_template_text,
-        additional_info=additional_info or ""
+        constraints_warnings=constraints_warnings or "",
+        output_format_text=output_format_text or "",
+        additional_info=additional_info or "",
+        template_text=chosen_template_text
     )
 
     final_prompt_encoded = final_prompt.replace("\n", "%0A").replace("#", "%23")
@@ -790,6 +826,7 @@ def generate_final_prompt(n_clicks,
         color="secondary"
     )
     return final_prompt, False, download_link
+
 
 app.clientside_callback(
     """
@@ -810,6 +847,7 @@ app.clientside_callback(
     prevent_initial_call=True
 )
 
+
 @app.callback(
     Output("copy-prompt-btn", "style"),
     Input("final-prompt-output", "value")
@@ -818,6 +856,7 @@ def hide_copy_button(prompt_text):
     if not prompt_text.strip():
         return {"display": "none"}
     return {}
+
 
 @app.callback(
     Output("parsed-changes-store", "data"),
@@ -875,6 +914,7 @@ def generate_diffs_callback(n_clicks, llm_text, folder_path):
         ]))
 
     return store_data, diffs_display
+
 
 @app.callback(
     Output("apply-feedback", "children"),
@@ -981,6 +1021,7 @@ def apply_or_restore_callback(apply_nclicks,
             return f"Error restoring backup: {e}", True, current_backups, []
     else:
         raise dash.exceptions.PreventUpdate
+
 
 server = app.server
 
