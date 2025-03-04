@@ -1,29 +1,32 @@
-import os
 import fnmatch
+import os
 from pathlib import Path
 from typing import List, Dict
 
 import dash
-from dash import dcc, html, Input, Output, State, ALL, no_update
 import dash_bootstrap_components as dbc
 import dash_mantine_components as dmc
-from dash_iconify import DashIconify
+from dash import dcc, html, Input, Output, State, ALL
 from dash._dash_renderer import _set_react_version
+from dash_iconify import DashIconify
 
 _set_react_version("18.2.0")
 
 EXTENSION_PRESETS = {
     "None": ".py, .js, .ts, .html, .css, .json",
-    "Django": ".py, .html, .css, .js",
-    "Machine Learning": ".py, .ipynb, .csv, .txt",
-    "Frontend (JS/TS)": ".html, .css, .js, .ts, .json",
+    "Academic Code": ".py, .ipynb, .r, .csv, .txt",
+    "Android (Kotlin/Java)": ".kt, .java, .xml",
     "Backend (General)": ".py, .js, .ts, .java, .c, .cpp, .cs, .go, .php",
+    "Bioinformatics": ".py, .ipynb, .r, .csv, .tsv, .txt",
+    "Data Science": ".py, .ipynb, .r, .csv, .tsv, .txt",
+    "Django": ".py, .html, .css, .js",
+    "Frontend (JS/TS)": ".html, .css, .js, .ts, .json",
+    "Machine Learning": ".py, .ipynb, .csv, .txt",
+    "React": ".js, .jsx, .ts, .tsx, .json, .html, .css",
     "VueJS": ".html, .css, .vue, .js, .ts, .json",
     "Angular": ".html, .css, .ts, .json",
-    "React": ".js, .jsx, .ts, .tsx, .json, .html, .css",
     "iOS (Swift)": ".swift, .h, .m, .mm, .plist",
-    "Android (Kotlin/Java)": ".kt, .java, .xml",
-    "Data Science": ".py, .ipynb, .r, .csv, .tsv, .txt",
+    "Performance Optimization": ".py, .js, .ts, .html, .css, .json",
 }
 
 BASE_EXCLUSIONS = {
@@ -51,16 +54,17 @@ PRESET_EXCLUSION_MAP = {
 
 PROMPT_LIBRARY = {
     "None (No Template)": "",
+    "Academic Code": "Check academic code correctness. If needed, propose short fixes.",
+    "Bioinformatics": "Make succinct improvements for bioinformatics data processing or analysis.",
     "Bug Fix / Debug": "You are a specialized debugging model. Identify and fix any bugs succinctly.",
-    "Performance Optimization": "Optimize the code or architecture concisely for better performance.",
-    "Security Audit": "Review code for security issues. Provide short, direct mitigations.",
-    "Refactoring": "Refactor the code for clarity and maintainability.",
     "Database Schema Advice": "Suggest best-practice improvements for database-related code.",
     "ML Model Tuning": "Optimize the ML code or pipeline with short recommended changes.",
-    "Bioinformatics": "Make succinct improvements for bioinformatics data processing or analysis.",
-    "Academic Code": "Check academic code correctness. If needed, propose short fixes.",
+    "Performance Optimization": "Optimize the code or architecture concisely for better performance.",
+    "Refactoring": "Refactor the code for clarity and maintainability.",
+    "Security Audit": "Review code for security issues. Provide short, direct mitigations.",
     "Testing Strategy": "Propose a concise testing strategy for the given code or system.",
 }
+
 
 def is_hidden_or_excluded(path: str, exclusion_list: List[str]) -> bool:
     p = Path(path)
@@ -73,7 +77,9 @@ def is_hidden_or_excluded(path: str, exclusion_list: List[str]) -> bool:
             return True
     return False
 
-def add_all_files(folder_path: str, base_path: str, extensions: List[str], exclusion_list: List[str], selected_files: List[str]):
+
+def add_all_files(folder_path: str, base_path: str, extensions: List[str], exclusion_list: List[str],
+                  selected_files: List[str]):
     for root, dirs, files in os.walk(folder_path):
         if is_hidden_or_excluded(root, exclusion_list):
             dirs[:] = []
@@ -88,12 +94,14 @@ def add_all_files(folder_path: str, base_path: str, extensions: List[str], exclu
                 if rel_path not in selected_files:
                     selected_files.append(rel_path)
 
+
 def read_entire_file(full_path: str) -> str:
     try:
         with open(full_path, 'r', encoding='utf-8', errors='replace') as f:
             return f.read()
     except Exception as e:
         return f"<!-- Could not read file: {e} -->"
+
 
 def read_selected_files(folder_path: str, selected_files: List[str]) -> List[Dict[str, str]]:
     base_folder_name = os.path.basename(folder_path.rstrip("/"))
@@ -110,6 +118,7 @@ def read_selected_files(folder_path: str, selected_files: List[str]) -> List[Dic
             'content': content,
         })
     return source_files
+
 
 def get_language_extension(filename: str) -> str:
     ext = Path(filename).suffix.lower()
@@ -138,7 +147,9 @@ def get_language_extension(filename: str) -> str:
     }
     return mapping.get(ext, '')
 
-def generate_prompt(source_files: List[Dict[str, str]], problem_description: str, template_text: str, prompt_position: str) -> str:
+
+def generate_prompt(source_files: List[Dict[str, str]], problem_description: str, template_text: str,
+                    additional_info: str) -> str:
     code_section = ["## Relevant Code"]
     for file_info in source_files:
         language = get_language_extension(file_info['filename'])
@@ -153,25 +164,20 @@ def generate_prompt(source_files: List[Dict[str, str]], problem_description: str
 
     tmpl = template_text.strip()
     prob = problem_description.strip()
+    addl = additional_info.strip()
 
-    # If no template and no problem description, just return the code section
-    if not tmpl and not prob:
+    if not tmpl and not prob and not addl:
         return code_block_str
 
-    if prompt_position == "After Template":
-        return (f"{tmpl}\n\n{code_block_str}\n\n## Problem\n{prob}").strip()
-    elif prompt_position == "Top Combined":
-        combined = (tmpl + "\n\n" + prob).strip()
-        return (combined + "\n\n" + code_block_str).strip()
-    else:  # "Top Separate"
-        template_block = f"## Template\n{tmpl}"
-        problem_block = f"## Problem\n{prob}"
-        return (template_block + "\n\n" + problem_block + "\n\n" + code_block_str).strip()
+    combined = (tmpl + "\n\n" + prob + "\n\n" + addl).strip()
+    return (combined + "\n\n" + code_block_str).strip()
+
 
 class FileTree:
     """
     We'll store all folder paths so we can expand them by default.
     """
+
     def __init__(self, filepath: Path, exclusions: List[str], extensions: List[str]):
         self.filepath = filepath
         self.exclusions = exclusions
@@ -246,6 +252,7 @@ class FileTree:
             style={"height": "600px", "overflowY": "auto"}
         )
 
+
 app = dash.Dash(__name__, external_stylesheets=[dbc.themes.BOOTSTRAP])
 
 mantine_theme = {
@@ -306,38 +313,31 @@ app.layout = dmc.MantineProvider(
                                                         dbc.Label("Extension Preset"),
                                                         dcc.Dropdown(
                                                             id="extension-preset",
-                                                            options=[{"label": k, "value": k} for k in EXTENSION_PRESETS.keys()],
+                                                            options=[{"label": k, "value": k} for k in
+                                                                     sorted(EXTENSION_PRESETS.keys())],
                                                             value="None"
                                                         ),
                                                         html.Br(),
 
                                                         dbc.Label("File Extensions"),
-                                                        dbc.Input(id="file-extensions", type="text", placeholder=".py, .js, .ts"),
+                                                        dbc.Input(id="file-extensions", type="text",
+                                                                  placeholder=".py, .js, .ts"),
                                                         html.Br(),
 
                                                         dbc.Label("Current Exclusion List"),
-                                                        dbc.Input(id="exclusions-field", type="text", placeholder=".git, .gitignore, .pycache"),
+                                                        dbc.Input(id="exclusions-field", type="text",
+                                                                  placeholder=".git, .gitignore, .pycache"),
                                                         html.Br(),
 
                                                         dbc.Label("Prompt Template (Optional)"),
                                                         dcc.Dropdown(
                                                             id="prompt-template",
-                                                            options=[{"label": k, "value": k} for k in PROMPT_LIBRARY.keys()],
+                                                            options=[{"label": k, "value": k} for k in
+                                                                     sorted(PROMPT_LIBRARY.keys())],
                                                             value="None (No Template)"
                                                         ),
                                                         html.Br(),
 
-                                                        dbc.Label("Prompt Position"),
-                                                        dbc.RadioItems(
-                                                            id="prompt-position",
-                                                            options=[
-                                                                {"label": "After Template", "value": "After Template"},
-                                                                {"label": "Top Combined", "value": "Top Combined"},
-                                                                {"label": "Top Separate", "value": "Top Separate"},
-                                                            ],
-                                                            value="After Template"
-                                                        ),
-                                                        html.Br(),
                                                         dbc.Alert(id="alert-no-files", color="danger", is_open=False),
                                                     ], md=4),
 
@@ -360,7 +360,8 @@ app.layout = dmc.MantineProvider(
                                             ]
                                         ),
                                     ],
-                                    style={"marginTop": "25px", "border": "none", "boxShadow": "0 1px 2px 0 rgba(0,0,0,0.2)"}
+                                    style={"marginTop": "25px", "border": "none",
+                                           "boxShadow": "0 1px 2px 0 rgba(0,0,0,0.2)"}
                                 ),
 
                                 dbc.Card(
@@ -372,39 +373,53 @@ app.layout = dmc.MantineProvider(
                                                     p="md",
                                                     style={"marginTop": "30px"},
                                                     children=[
-                                                        dmc.Group(
-                                                            [
-                                                                dbc.Button("Generate Prompt", id="generate-button", color="primary"),
-                                                                dbc.Button("Copy Prompt", id="copy-prompt-btn", color="secondary"),
-                                                                html.Span(id="download-link-container")
-                                                            ],
-                                                            gap="sm"
-                                                        ),
-                                                        html.Br(),
                                                         dbc.Row([
                                                             dbc.Col([
                                                                 html.H4("Describe Your Task or Question"),
                                                                 dcc.Textarea(
                                                                     id="problem-description",
-                                                                    style={"width": "100%", "height": "300px"},
+                                                                    style={"width": "100%", "height": "200px"},
                                                                 )
                                                             ], md=6),
+                                                            dbc.Col([
+                                                                html.H4("Additional Information"),
+                                                                dcc.Textarea(
+                                                                    id="additional-info",
+                                                                    style={"width": "100%", "height": "200px"},
+                                                                )
+                                                            ], md=6),
+                                                        ]),
+                                                        html.Br(),
+                                                        dbc.Row([
+                                                            dbc.Col([
+                                                                dbc.Button("Generate Prompt", id="generate-button",
+                                                                           color="primary",
+                                                                           style={"margin-right": "10px"}),
+                                                                dbc.Button("Copy Prompt", id="copy-prompt-btn",
+                                                                           color="secondary",
+                                                                           style={"margin-right": "10px"}),
+                                                                html.Span(id="download-link-container")
+                                                            ], width=12),
+                                                        ]),
+                                                        html.Br(),
+                                                        dbc.Row([
                                                             dbc.Col([
                                                                 html.H4("Generated Prompt"),
                                                                 dcc.Textarea(
                                                                     id="final-prompt-output",
                                                                     style={"width": "100%", "height": "300px"},
-                                                                    readOnly=True
+                                                                    readOnly=False
                                                                 ),
                                                                 dcc.Store(id="dummy-store", data="")
-                                                            ], md=6)
+                                                            ], width=12),
                                                         ])
                                                     ]
                                                 ),
                                             ]
                                         ),
                                     ],
-                                    style={"marginTop": "25px", "border": "none", "boxShadow": "0 1px 2px 0 rgba(0,0,0,0.2)"}
+                                    style={"marginTop": "25px", "border": "none",
+                                           "boxShadow": "0 1px 2px 0 rgba(0,0,0,0.2)"}
                                 ),
                             ]),
                             dbc.Tab(label="Other Feature (Coming Soon)", children=[
@@ -424,6 +439,7 @@ app.layout = dmc.MantineProvider(
     ], fluid=True)
 )
 
+
 @app.callback(
     Output("file-extensions", "value"),
     Output("exclusions-field", "value"),
@@ -439,6 +455,7 @@ def sync_fields_with_preset(preset_label):
 
     excl_text = ", ".join(sorted(list(base_exclusion_set)))
     return preset_extensions, excl_text
+
 
 @app.callback(
     Output("folder-warning", "is_open"),
@@ -474,10 +491,13 @@ def update_file_tree(folder_path, file_ext_string, exclusion_string):
     )
     return False, tree_obj.render()
 
+
 @app.callback(
     Output({"type": "file_checkbox", "index": ALL}, "checked"),
+    Output({"type": "folder_checkbox", "index": ALL}, "checked"),
     Input({"type": "folder_checkbox", "index": ALL}, "checked"),
     State({"type": "folder_checkbox", "index": ALL}, "id"),
+    State({"type": "folder_checkbox", "index": ALL}, "checked"),
     State({"type": "file_checkbox", "index": ALL}, "id"),
     State({"type": "file_checkbox", "index": ALL}, "checked"),
     State("folder-path", "value"),
@@ -485,11 +505,23 @@ def update_file_tree(folder_path, file_ext_string, exclusion_string):
     State("exclusions-field", "value"),
     prevent_initial_call=True
 )
-def toggle_folder_files(folder_check_values, folder_ids, file_ids, file_check_values,
+def toggle_folder_files(folder_check_values, folder_ids, old_folder_check_values,
+                        file_ids, file_check_values,
                         folder_path, file_ext_string, exclusion_string):
     if not folder_path or not os.path.isdir(folder_path):
-        return file_check_values
+        return file_check_values, old_folder_check_values
 
+    def get_subfolders_abs(base_abs_path, exclusion_list, collected_abs):
+        for root, dirs, _files in os.walk(base_abs_path):
+            if is_hidden_or_excluded(root, exclusion_list):
+                dirs[:] = []
+                continue
+            for d in dirs:
+                full_dir = os.path.join(root, d)
+                if not is_hidden_or_excluded(full_dir, exclusion_list):
+                    collected_abs.add(os.path.abspath(full_dir))
+
+    # Build list of valid extensions
     extensions = []
     for ext in file_ext_string.split(","):
         e = ext.strip().lower()
@@ -498,6 +530,7 @@ def toggle_folder_files(folder_check_values, folder_ids, file_ids, file_check_va
         if e:
             extensions.append(e)
 
+    # Build set of exclusions
     user_excl_clean = set()
     if exclusion_string.strip():
         for x in exclusion_string.split(","):
@@ -505,18 +538,36 @@ def toggle_folder_files(folder_check_values, folder_ids, file_ids, file_check_va
             if x2:
                 user_excl_clean.add(x2)
 
-    new_states = list(file_check_values)
+    new_file_states = list(file_check_values)
+    new_folder_states = list(old_folder_check_values)
+
+    # For each folder checkbox that we toggle:
     for f_val, f_id in zip(folder_check_values, folder_ids):
-        folder_str = f_id["index"]
+        folder_abs = os.path.abspath(f_id["index"])  # Ensure absolute
+        # 1) Gather all subfolders (including the folder itself)
+        all_subfolders_abs = set()
+        all_subfolders_abs.add(folder_abs)
+        get_subfolders_abs(folder_abs, list(user_excl_clean), all_subfolders_abs)
+
+        # 2) Toggle all matching folder checkboxes
+        for idx, (fld_id, fld_state) in enumerate(zip(folder_ids, new_folder_states)):
+            if fld_id["index"]:
+                fld_abs = os.path.abspath(fld_id["index"])
+                if fld_abs in all_subfolders_abs:
+                    new_folder_states[idx] = f_val
+
+        # 3) Toggle all files under these subfolders
         subfiles = []
-        add_all_files(folder_str, folder_path, extensions, list(user_excl_clean), subfiles)
-        for idx, (this_file_id, old_val) in enumerate(zip(file_ids, file_check_values)):
+        for subf in all_subfolders_abs:
+            add_all_files(subf, folder_path, extensions, list(user_excl_clean), subfiles)
+        for idx, (this_file_id, old_val_file) in enumerate(zip(file_ids, new_file_states)):
             if this_file_id["index"]:
                 rel_path = os.path.relpath(this_file_id["index"], folder_path)
                 if rel_path in subfiles:
-                    new_states[idx] = f_val
+                    new_file_states[idx] = f_val
 
-    return new_states
+    return new_file_states, new_folder_states
+
 
 @app.callback(
     Output("selected-count", "children"),
@@ -528,6 +579,7 @@ def count_selected_files(file_check_values):
         return "0 file(s) selected"
     return f"{sum(bool(v) for v in file_check_values)} file(s) selected"
 
+
 @app.callback(
     Output("final-prompt-output", "value"),
     Output("alert-no-files", "is_open"),
@@ -535,16 +587,16 @@ def count_selected_files(file_check_values):
     Input("generate-button", "n_clicks"),
     State("folder-path", "value"),
     State("problem-description", "value"),
+    State("additional-info", "value"),
     State("prompt-template", "value"),
-    State("prompt-position", "value"),
     State({"type": "file_checkbox", "index": ALL}, "id"),
     State({"type": "file_checkbox", "index": ALL}, "checked")
 )
 def generate_final_prompt(n_clicks,
                           folder_path,
                           problem_description,
+                          additional_info,
                           template_key,
-                          prompt_position,
                           file_ids,
                           file_checked):
     if not n_clicks:
@@ -569,12 +621,10 @@ def generate_final_prompt(n_clicks,
         source_files=source_files,
         problem_description=problem_description or "",
         template_text=chosen_template_text,
-        prompt_position=prompt_position
+        additional_info=additional_info or ""
     )
 
-    # Ensure we properly encode special chars so the entire final prompt is included
     final_prompt_encoded = final_prompt.replace("\n", "%0A").replace("#", "%23")
-
     download_link = dbc.Button(
         "Download Prompt",
         id="download-btn",
@@ -585,7 +635,7 @@ def generate_final_prompt(n_clicks,
     )
     return final_prompt, False, download_link
 
-# Clientside callback for "Copy Prompt"
+
 app.clientside_callback(
     """
     function(n_clicks, content) {
@@ -605,7 +655,18 @@ app.clientside_callback(
     prevent_initial_call=True
 )
 
+
+@app.callback(
+    Output("copy-prompt-btn", "style"),
+    Input("final-prompt-output", "value")
+)
+def hide_copy_button(prompt_text):
+    if not prompt_text.strip():
+        return {"display": "none"}
+    return {}
+
+
 server = app.server
 
 if __name__ == "__main__":
-    app.run_server(debug=True)
+    app.run_server(debug=True, port=8051)
