@@ -1,9 +1,12 @@
+import difflib
 import fnmatch
 import os
+import re
 from pathlib import Path
 from typing import List, Dict
 
 import dash
+import dash.exceptions
 import dash_bootstrap_components as dbc
 import dash_mantine_components as dmc
 from dash import dcc, html, Input, Output, State, ALL
@@ -64,6 +67,45 @@ PROMPT_LIBRARY = {
     "Security Audit": "Review code for security issues. Provide short, direct mitigations.",
     "Testing Strategy": "Propose a concise testing strategy for the given code or system.",
 }
+
+file_pattern = re.compile(r'^\s*file\s*:\s*(.*)', re.IGNORECASE)
+
+
+def parse_llm_response(text: str) -> List[Dict[str, str]]:
+    lines = text.splitlines()
+    blocks = []
+    current_file = None
+    current_content = []
+    for line in lines:
+        match = file_pattern.match(line)
+        if match:
+            if current_file and current_content:
+                blocks.append({
+                    "filename": current_file,
+                    "new_content": "\n".join(current_content).rstrip()
+                })
+            current_file = match.group(1).strip()
+            current_content = []
+        else:
+            current_content.append(line)
+    if current_file and current_content:
+        blocks.append({
+            "filename": current_file,
+            "new_content": "\n".join(current_content).rstrip()
+        })
+    return blocks
+
+
+def generate_side_by_side_diff(original: str, new_content: str, filename: str) -> str:
+    if not original and not new_content:
+        return f"File '{filename}' is empty both before and after."
+    diff_html = difflib.HtmlDiff(wrapcolumn=80).make_table(
+        original.splitlines(),
+        new_content.splitlines(),
+        fromdesc=f"a/{filename}",
+        todesc=f"b/{filename}",
+    )
+    return diff_html
 
 
 def is_hidden_or_excluded(path: str, exclusion_list: List[str]) -> bool:
@@ -249,7 +291,7 @@ class FileTree:
             multiple=True,
             value=self.folders_expanded,
             variant="contained",
-            style={"height": "600px", "overflowY": "auto"}
+            style={"height": "400px", "overflowY": "auto"}
         )
 
 
@@ -313,8 +355,8 @@ app.layout = dmc.MantineProvider(
                                                         dbc.Label("Extension Preset"),
                                                         dcc.Dropdown(
                                                             id="extension-preset",
-                                                            options=[{"label": k, "value": k} for k in
-                                                                     sorted(EXTENSION_PRESETS.keys())],
+                                                            options=[{"label": k, "value": k}
+                                                                     for k in sorted(EXTENSION_PRESETS.keys())],
                                                             value="None"
                                                         ),
                                                         html.Br(),
@@ -332,8 +374,8 @@ app.layout = dmc.MantineProvider(
                                                         dbc.Label("Prompt Template (Optional)"),
                                                         dcc.Dropdown(
                                                             id="prompt-template",
-                                                            options=[{"label": k, "value": k} for k in
-                                                                     sorted(PROMPT_LIBRARY.keys())],
+                                                            options=[{"label": k, "value": k}
+                                                                     for k in sorted(PROMPT_LIBRARY.keys())],
                                                             value="None (No Template)"
                                                         ),
                                                         html.Br(),
@@ -422,13 +464,37 @@ app.layout = dmc.MantineProvider(
                                            "boxShadow": "0 1px 2px 0 rgba(0,0,0,0.2)"}
                                 ),
                             ]),
-                            dbc.Tab(label="Other Feature (Coming Soon)", children=[
+
+                            dbc.Tab(label="Apply LLM Updates", children=[
                                 html.Br(),
-                                html.H2("Another feature will go here in the future!"),
-                                html.P(
-                                    "We're planning additional functionalities to further enhance your experience. "
-                                    "Stay tuned for more updates and improvements in upcoming versions!"
-                                )
+                                html.H4("Paste LLM Response Below"),
+                                dbc.Textarea(
+                                    id="llm-response-input",
+                                    style={"width": "100%", "height": "200px"},
+                                    placeholder="Paste LLM's updated code blocks here (prefixed by 'File: ...')"
+                                ),
+                                html.Br(),
+                                dbc.Button("Generate Diffs", id="generate-diffs-btn", color="primary"),
+                                html.Br(), html.Br(),
+                                dbc.Alert(id="apply-feedback", color="info", is_open=False),
+                                dcc.Store(id="parsed-changes-store", data=[]),
+                                dcc.Store(id="backups-store", data=[]),
+                                html.Div(id="diffs-output"),
+                                html.Br(),
+                                dbc.Button("Apply Changes", id="apply-changes-btn", color="danger"),
+                                html.Br(), html.Br(),
+                                html.Hr(),
+                                html.H5("Restore from Backup"),
+                                dcc.Dropdown(
+                                    id="backup-select-dropdown",
+                                    placeholder="Select a file to restore...",
+                                    options=[],
+                                    value=None,
+                                    style={"width": "300px"}
+                                ),
+                                html.Br(),
+                                dbc.Button("Restore Selected Backup", id="restore-backup-btn", color="secondary"),
+                                html.Br(), html.Br()
                             ])
                         ])
                     ]
@@ -521,7 +587,6 @@ def toggle_folder_files(folder_check_values, folder_ids, old_folder_check_values
                 if not is_hidden_or_excluded(full_dir, exclusion_list):
                     collected_abs.add(os.path.abspath(full_dir))
 
-    # Build list of valid extensions
     extensions = []
     for ext in file_ext_string.split(","):
         e = ext.strip().lower()
@@ -530,7 +595,6 @@ def toggle_folder_files(folder_check_values, folder_ids, old_folder_check_values
         if e:
             extensions.append(e)
 
-    # Build set of exclusions
     user_excl_clean = set()
     if exclusion_string.strip():
         for x in exclusion_string.split(","):
@@ -541,22 +605,18 @@ def toggle_folder_files(folder_check_values, folder_ids, old_folder_check_values
     new_file_states = list(file_check_values)
     new_folder_states = list(old_folder_check_values)
 
-    # For each folder checkbox that we toggle:
     for f_val, f_id in zip(folder_check_values, folder_ids):
-        folder_abs = os.path.abspath(f_id["index"])  # Ensure absolute
-        # 1) Gather all subfolders (including the folder itself)
+        folder_abs = os.path.abspath(f_id["index"])
         all_subfolders_abs = set()
         all_subfolders_abs.add(folder_abs)
         get_subfolders_abs(folder_abs, list(user_excl_clean), all_subfolders_abs)
 
-        # 2) Toggle all matching folder checkboxes
         for idx, (fld_id, fld_state) in enumerate(zip(folder_ids, new_folder_states)):
             if fld_id["index"]:
                 fld_abs = os.path.abspath(fld_id["index"])
                 if fld_abs in all_subfolders_abs:
                     new_folder_states[idx] = f_val
 
-        # 3) Toggle all files under these subfolders
         subfiles = []
         for subf in all_subfolders_abs:
             add_all_files(subf, folder_path, extensions, list(user_excl_clean), subfiles)
@@ -601,7 +661,6 @@ def generate_final_prompt(n_clicks,
                           file_checked):
     if not n_clicks:
         return "", False, ""
-
     if not folder_path or not os.path.isdir(folder_path):
         return "", False, ""
 
@@ -631,7 +690,8 @@ def generate_final_prompt(n_clicks,
         href="data:text/plain;charset=utf-8," + final_prompt_encoded,
         download="reasoning_prompt.txt",
         external_link=True,
-        color="secondary"
+        color="secondary",
+        style={"margin-right": "10px"}
     )
     return final_prompt, False, download_link
 
@@ -664,6 +724,168 @@ def hide_copy_button(prompt_text):
     if not prompt_text.strip():
         return {"display": "none"}
     return {}
+
+
+@app.callback(
+    Output("parsed-changes-store", "data"),
+    Output("diffs-output", "children"),
+    Input("generate-diffs-btn", "n_clicks"),
+    State("llm-response-input", "value"),
+    State("folder-path", "value"),
+    prevent_initial_call=True
+)
+def generate_diffs_callback(n_clicks, llm_text, folder_path):
+    if not folder_path or not os.path.isdir(folder_path):
+        return [], "Invalid or missing folder path."
+    if not llm_text:
+        return [], "No response provided."
+
+    changes = parse_llm_response(llm_text)
+    if not changes:
+        return [], "No code blocks detected."
+
+    diffs_display = []
+    store_data = []
+    for change in changes:
+        filename = change["filename"]
+        new_content = change["new_content"]
+        file_path = os.path.join(folder_path, filename)
+        if os.path.isfile(file_path):
+            original_content = read_entire_file(file_path)
+        else:
+            original_content = ""
+
+        diff_html = generate_side_by_side_diff(original_content, new_content, filename)
+        store_data.append({
+            "filename": filename,
+            "diff_html": diff_html,
+            "new_content": new_content,
+            "apply_selected": True
+        })
+
+        diffs_display.append(html.Div([
+            html.H5(filename),
+            dmc.Checkbox(
+                label="Select to apply",
+                id={"type": "apply_check", "index": filename},
+                size="sm",
+                checked=True
+            ),
+            html.Div(
+                style={"overflow": "auto", "border": "1px solid #ccc", "marginTop": "5px"},
+                children=html.Div(dangerouslySetInnerHTML={"__html": diff_html})
+            ),
+            html.Hr()
+        ]))
+
+    return store_data, diffs_display
+
+
+@app.callback(
+    Output("apply-feedback", "children"),
+    Output("apply-feedback", "is_open"),
+    Output("backups-store", "data"),
+    Output("backup-select-dropdown", "options"),
+    Input("apply-changes-btn", "n_clicks"),
+    Input("restore-backup-btn", "n_clicks"),
+    State("parsed-changes-store", "data"),
+    State({"type": "apply_check", "index": ALL}, "checked"),
+    State({"type": "apply_check", "index": ALL}, "id"),
+    State("folder-path", "value"),
+    State("backups-store", "data"),
+    State("backup-select-dropdown", "value"),
+    prevent_initial_call=True
+)
+def apply_or_restore_callback(apply_nclicks,
+                              restore_nclicks,
+                              parsed_changes,
+                              check_values,
+                              check_ids,
+                              folder_path,
+                              current_backups,
+                              selected_backup_file):
+    ctx = dash.callback_context
+    if not ctx.triggered:
+        raise dash.exceptions.PreventUpdate
+    trigger_id = ctx.triggered[0]['prop_id'].split('.')[0]
+
+    if trigger_id == "apply-changes-btn":
+        if not folder_path or not os.path.isdir(folder_path):
+            return "Invalid or missing folder path.", True, current_backups, []
+        if not parsed_changes:
+            return "No changes to apply.", True, current_backups, []
+        if current_backups is None:
+            current_backups = []
+
+        apply_dict = {}
+        for check_val, cid in zip(check_values, check_ids):
+            filename = cid["index"]
+            apply_dict[filename] = check_val
+
+        applied_files = []
+        for item in parsed_changes:
+            fn = item["filename"]
+            new_content = item["new_content"]
+            if not apply_dict.get(fn, False):
+                continue
+            file_path = os.path.join(folder_path, fn)
+            try:
+                if os.path.isfile(file_path):
+                    backup_file = file_path + ".bak"
+                    os.rename(file_path, backup_file)
+                    current_backups.append({
+                        "original_file": file_path,
+                        "backup_file": backup_file
+                    })
+                dir_name = os.path.dirname(file_path)
+                if dir_name and not os.path.exists(dir_name):
+                    os.makedirs(dir_name, exist_ok=True)
+                with open(file_path, "w", encoding="utf-8") as f:
+                    f.write(new_content)
+                applied_files.append(fn)
+            except Exception as e:
+                return f"Error applying changes to {fn}: {e}", True, current_backups, []
+
+        if applied_files:
+            backup_options = []
+            for bk in current_backups:
+                backup_options.append({"label": os.path.basename(bk["backup_file"]),
+                                       "value": bk["backup_file"]})
+            return (
+                f"Updated/created (old versions renamed to *.bak): {', '.join(applied_files)}",
+                True,
+                current_backups,
+                backup_options
+            )
+        else:
+            return ("No files were selected to apply changes.", True, current_backups, [])
+
+    elif trigger_id == "restore-backup-btn":
+        if not selected_backup_file or not current_backups:
+            return "No backup selected or no backups available.", True, current_backups, []
+        matched = [bk for bk in current_backups if bk["backup_file"] == selected_backup_file]
+        if not matched:
+            return "Backup file not found in records.", True, current_backups, []
+        backup_entry = matched[0]
+        backup_file = backup_entry["backup_file"]
+        original_file = backup_entry["original_file"]
+        try:
+            if os.path.isfile(original_file):
+                os.remove(original_file)
+            os.rename(backup_file, original_file)
+            return (
+                f"Restored backup {os.path.basename(backup_file)} → {os.path.basename(original_file)}",
+                True,
+                current_backups,
+                [
+                    {"label": os.path.basename(bk["backup_file"]), "value": bk["backup_file"]}
+                    for bk in current_backups
+                ]
+            )
+        except Exception as e:
+            return f"Error restoring backup: {e}", True, current_backups, []
+    else:
+        raise dash.exceptions.PreventUpdate
 
 
 server = app.server
